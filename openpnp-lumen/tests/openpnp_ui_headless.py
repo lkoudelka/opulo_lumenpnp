@@ -17,6 +17,10 @@ from java.io import File
 from org.openpnp.model import (Configuration, Board, BoardLocation, Job, Length, LengthUnit, Location,
                                Part, Placement, Abstract2DLocatable)
 from org.openpnp.machine.photon import PhotonFeeder
+if not os.path.exists(os.path.join(sandbox, "lumen", "lib")):     # as install.sh does
+    if not os.path.isdir(os.path.join(sandbox, "lumen")):
+        os.makedirs(os.path.join(sandbox, "lumen"))
+    os.symlink(os.path.join(ROOT, "lib"), os.path.join(sandbox, "lumen", "lib"))
 Configuration.initialize(File(sandbox))
 Configuration.get().load()
 machine = Configuration.get().getMachine()
@@ -25,9 +29,13 @@ mm = LengthUnit.Millimeters
 results = []
 
 
+from java.lang import System as _Sys
+
+
 def check(name, cond, detail=""):
+    # java System.out: OpenPnP's script engine (used below) redirects Python's sys.stdout
     results.append(bool(cond))
-    print("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, detail))
+    _Sys.out.println("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, detail))
 
 
 # ---- fakes for what needs a display ---------------------------------------------------
@@ -238,8 +246,65 @@ res = dict((row[0], row[1]) for row in pf.model.rows)
 check("preflight ran all steps", len(res) == 8 and "..." not in res.values(), res)
 check("home / job / readiness / bus pass", all(res.get(k) == "PASS" for k in
       ("machine_enabled", "job_open", "home", "job_readiness", "feeder_bus")), res)
+
+_Sys.out.println("Lumen-profile hooks via OpenPnP Scripting.on()")
+import json as _json
+from java.util import HashMap
+from org.openpnp.scripting import Scripting
+from org.openpnp.spi.PartAlignment import PartAlignmentOffset
+ev_scripts = os.path.join(work, "hookscripts")
+os.makedirs(os.path.join(ev_scripts, "Events"))
+for h in ("Feeder.AfterFeed.py", "Vision.PartAlignment.After.py"):
+    os.symlink(os.path.join(ROOT, "events", "lumen-profile", h), os.path.join(ev_scripts, "Events", h))
+sc = Scripting(File(ev_scripts))
+f2 = [f for f in machine.getFeeders() if hasattr(f, "getSlotAddress") and f.getSlotAddress() == 2][0]
+n1 = machine.getDefaultHead().getDefaultNozzle()
+pm = HashMap(); pm.put("feeder", f2); pm.put("nozzle", n1); pm.put("part", parts["R0402"]); pm.put("scripting", sc)
+sc.on("Feeder.AfterFeed", pm)
+am = HashMap(); am.put("part", parts["R0402"]); am.put("nozzle", n1); am.put("scripting", sc)
+am.put("offsets", PartAlignmentOffset(Location(mm, 0.1, -0.2, 0, 1.5), False))
+sc.on("Vision.PartAlignment.After", am)
+po = os.path.join(work, "lumen", "pick-offsets.jsonl")       # <scripts dir parent>/lumen
+recs = [_json.loads(l) for l in open(po)] if os.path.isfile(po) else []
+check("alignment hook records feeder + offset", recs and recs[-1]["feeder_id"] == str(f2.getId()) and recs[-1]["slot"] == 2
+      and abs(recs[-1]["dx"] - 0.1) < 1e-9 and recs[-1]["pick"] is not None, recs[-1:] or "no record")
+bad = HashMap(); bad.put("scripting", sc)
+try:
+    sc.on("Vision.PartAlignment.After", bad)
+    sc.on("Feeder.AfterFeed", bad)
+    check("hooks never raise (missing variables)", True)
+except Exception as e:
+    check("hooks never raise (missing variables)", False, e)
+
+_Sys.out.println("Pick Offset Learning dialog")
+lumen_dir = os.path.join(sandbox, "lumen")
+fh = open(os.path.join(lumen_dir, "pick-offsets.jsonl"), "w")
+for i in range(10):
+    fh.write(_json.dumps({"t": "2000-01-01T09:00:%02d" % i, "feeder_id": str(f2.getId()), "feeder": f2.getName(), "slot": 2,
+                          "part": "R0402", "dx": 0.30, "dy": -0.10, "drot": 0.5, "units": "Millimeters",
+                          "pick": [40, 300, 10, 0], "nozzle_rot": 0.0}) + "\n")
+fh.close()
+g, cls = load_script("Pick_Offset_Learning.py")
+pl = g[cls]()
+row = [i for i, x in enumerate(pl.model.rows) if x["feeder_id"] == str(f2.getId())]
+check("feeder row with suggestion", row and pl.model.rows[row[0]]["suggest"] is not None, pl.model.rows[row[0]]["status"] if row else "-")
+before = f2.getOffset()
+pl.table.setRowSelectionInterval(row[0], row[0])
+FakeOptionPane.answer = 0
+pl.apply()
+after = f2.getOffset()
+check("Apply moves the Photon feeder offset by +0.15 / -0.05 mm",
+      abs(after.getX() - before.getX() - 0.15) < 1e-6 and abs(after.getY() - before.getY() + 0.05) < 1e-6, after)
+check("after Apply: collecting new samples", "collecting" in pl.model.rows[[i for i, x in enumerate(pl.model.rows)
+                                                                            if x["feeder_id"] == str(f2.getId())][0]]["status"])
+pl.table.setRowSelectionInterval(0, 0)
+pl.undo()
+check("Undo restores the exact offset", f2.getOffset().getX() == before.getX() and f2.getOffset().getY() == before.getY(), f2.getOffset())
+corr = [_json.loads(l) for l in open(os.path.join(lumen_dir, "offset-corrections.jsonl"))]
+check("corrections log: applied (marked undone) + undo record", len(corr) == 2 and corr[0].get("undone") and corr[1].get("undo_of"))
+check("profile shown as original (stock nozzles)", "original" in str(pl.info.getText()))
 machine.setEnabled(False)
 
-print("\n%d/%d checks passed" % (sum(results), len(results)))
+_Sys.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 from java.lang import System
 System.exit(0 if all(results) else 1)

@@ -34,10 +34,13 @@ def part_height_mm(part):
         return 0.0
 
 
-def readiness(job, machine):
+def readiness(job, machine, lumen_profile=None):
     """One row per part used by the job:
     {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, issues: [str]}"""
     from org.openpnp.machine.photon import PhotonFeeder
+    if lumen_profile is None:
+        from lumen.oppnp import active_profile
+        lumen_profile = active_profile(machine) == "lumen"
     rows = {}
     for bl, pl, placed in job_placements(job):
         part = pl.getPart()
@@ -46,7 +49,7 @@ def readiness(job, machine):
         if r is None:
             r = rows[key] = {"part": part, "part_id": key, "total": 0, "remaining": 0,
                              "package": part.getPackage().getId() if part and part.getPackage() else "",
-                             "height": part_height_mm(part) if part else 0.0}
+                             "height": part_height_mm(part) if part else 0.0, "notes": []}
         r["total"] += 1
         if not placed:
             r["remaining"] += 1
@@ -64,7 +67,18 @@ def readiness(job, machine):
             issues.append("no usable feeder: " + "; ".join(
                 "%s: %s" % (f.getName(), unusable_reason(f)) for f in r["feeders"]))
         if part is not None and r["height"] <= 0:
-            issues.append("part height unknown")
+            if not lumen_profile:
+                issues.append("part height unknown")
+            else:
+                r["notes"].append("height unknown: probed on first pick (lumen)")
+        if lumen_profile and part is not None and r["package"]:
+            try:
+                fp = part.getPackage().getFootprint()
+                if fp is None or fp.getBodyWidth() <= 0 or fp.getBodyHeight() <= 0:
+                    issues.append("package %s has no body size: the bottom-vision size check (lumen) would "
+                                  "reject it" % r["package"])
+            except Exception:
+                pass
         r["issues"] = issues
     return sorted(rows.values(), key=lambda r: (not r["issues"], r["part_id"]))
 

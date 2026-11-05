@@ -5,9 +5,11 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 REL=${1:?usage: run_all.sh RELEASE.bin}
 RC=0
-for t in "test_photon_sim.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" "run_config_compat.sh"; do
+for t in "test_photon_sim.py" "test_learning.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" \
+         "run_config_compat.sh" "test_profiles.py"; do
     echo "=== $t"
     case $t in
+        test_learning.py|test_profiles.py) ${PY:-python3} "$HERE/$t" ;;
         *.py) ${PY:-python3} "$HERE/$t" "$REL" ;;
         run_openpnp_headless.sh|run_config_compat.sh) "$HERE/$t" ;;
         *) "$HERE/$t" "$REL" ;;
