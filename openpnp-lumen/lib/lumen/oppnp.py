@@ -190,3 +190,36 @@ def active_profile(machine):
     except (Exception, JavaException):
         pass
     return "original"
+
+
+def feeder_rotation(feeder):
+    """Current rotation of the part in the feeder (pick location rotation) or None."""
+    try:
+        return float(feeder.getPickLocation().getRotation())
+    except (Exception, JavaException):
+        return None
+
+
+def set_feeder_rotation(feeder, deg):
+    """Set the part rotation in the feeder to deg.  Photon feeders: only the rotation of the
+    offset changes (pick = slot location + offset); other feeders: the location rotation.
+    Verified by reading the pick location back; reverted if it does not match."""
+    from lumen.orientation import norm
+    cur = feeder_rotation(feeder)
+    if cur is None:
+        raise RuntimeError("feeder %s: pick location not fully configured" % feeder.getName())
+    if hasattr(feeder, "getOffset") and hasattr(feeder, "setOffset") and feeder.getOffset() is not None:
+        old = feeder.getOffset()
+        feeder.setOffset(old.derive(None, None, None, old.getRotation() + norm(deg - cur)))
+        restore = lambda: feeder.setOffset(old)
+    elif hasattr(feeder, "getLocation") and hasattr(feeder, "setLocation"):
+        old = feeder.getLocation()
+        feeder.setLocation(old.derive(None, None, None, old.getRotation() + norm(deg - cur)))
+        restore = lambda: feeder.setLocation(old)
+    else:
+        raise RuntimeError("feeder %s: rotation cannot be set by script" % feeder.getName())
+    now = feeder_rotation(feeder)
+    if now is None or abs(norm(now - deg)) > 0.01:
+        restore()
+        raise RuntimeError("feeder %s: rotation did not take effect (%s), reverted" % (feeder.getName(), now))
+    return now
