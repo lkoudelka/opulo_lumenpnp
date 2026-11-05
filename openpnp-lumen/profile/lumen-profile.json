@@ -1,0 +1,26 @@
+{
+  "_help": "What 'pnp-profile use lumen' changes; 'use original' undoes exactly this. Values are first-time defaults: once tuned in the lumen profile, your tuned values are kept and restored on every switch.",
+
+  "contact_probe_nozzles": {
+    "_study": "§1 auto Z: OpenPnP ContactProbeNozzle with the existing vacuum sensors (VAC1/VAC2)",
+    "nozzles": "all",
+    "attributes": {
+      "contact-probe-method": "VacuumSense",
+      "feeder-height-probing": "AfterHoming",
+      "part-height-probing": "Once",
+      "discard-probing": "false"
+    }
+  },
+
+  "bottom_vision": {
+    "_study": "§2 orientation: bottom-vision part size check catches 90° errors of non-square parts",
+    "settings": {
+      "BVS_Default": {"check-part-size-method": "BodySize", "check-size-tolerance-percent": "25"}
+    }
+  },
+
+  "event_hooks": {
+    "_study": "§3 pick-offset learning: record which feeder supplied each nozzle and the bottom-vision offset of the part",
+    "hooks": ["Feeder.AfterFeed", "Vision.PartAlignment.After"]
+  }
+}
