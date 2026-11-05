@@ -52,7 +52,7 @@ class Model(AbstractTableModel):
         return [x["part_id"], x["package"], "%.2f" % x["height"] if x["height"] > 0 else "?",
                 str(x["total"]), str(x["remaining"]),
                 ", ".join(jobinfo.feeder_text(f) for f in x["feeders"]) or "-",
-                "; ".join(x["issues"]) or "OK"][c]
+                "; ".join(x["issues"]) or "; ".join(["OK"] + x.get("notes", []))][c]
 
 
 class IssueRenderer(DefaultTableCellRenderer):

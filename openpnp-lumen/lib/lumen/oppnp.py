@@ -179,3 +179,14 @@ def photon_feeders(machine):
         if isinstance(f, PhotonFeeder) and f.getSlotAddress() is not None:
             out[int(f.getSlotAddress())] = f
     return out
+
+
+def active_profile(machine):
+    """'lumen' if the lumen profile is active (ContactProbeNozzle present), else 'original'."""
+    try:
+        for n in machine.getDefaultHead().getNozzles():
+            if n.getClass().getSimpleName() == "ContactProbeNozzle":
+                return "lumen"
+    except (Exception, JavaException):
+        pass
+    return "original"

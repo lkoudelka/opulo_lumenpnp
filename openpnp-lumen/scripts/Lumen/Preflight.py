@@ -40,6 +40,9 @@ DEFAULT = {
         {"id": "vacuum_sensors", "on": True, "severity": "warn"},
         {"id": "job_readiness", "on": True, "severity": "fail"},
         {"id": "feeder_bus", "on": True, "severity": "fail", "min_version": ""},
+        {"id": "board_z", "on": False, "severity": "warn", "max_tilt_mm": 0.15,
+         "_help": "lumen profile only. points: board name -> [[x, y], ...] board coordinates of BARE areas (no parts)",
+         "points": {}},
     ],
 }
 COLS = ["Step", "Result", "Detail"]
@@ -134,6 +137,38 @@ def st_feeder_bus(cfg, ctx):
     if old:
         detail += "; firmware older than %s: %s" % (minv, old)
     return not missing and not old, detail
+
+
+def st_board_z(cfg, ctx):
+    """§1: contact-probe board Z at configured bare points (ContactProbeNozzle, lumen profile)."""
+    from org.openpnp.model import LengthUnit, Location
+    from org.openpnp.util import Utils2D
+    nozzle = machine.getDefaultHead().getDefaultNozzle()
+    if nozzle.getClass().getSimpleName() != "ContactProbeNozzle":
+        return None, "needs the lumen profile (ContactProbeNozzle): pnp-profile use lumen"
+    job = gui.getJobTab().getJob()
+    pts = cfg.get("points") or {}
+    out, ok = [], True
+    for bl in job.getBoardLocations():
+        if not bl.isEnabled():
+            continue
+        name = bl.getPlacementsHolder().getName()
+        if name not in pts:
+            out.append("%s: no probe points configured" % name)
+            continue
+        zs = []
+        for x, y in pts[name]:
+            target = Utils2D.calculateBoardPlacementLocation(bl, Location(LengthUnit.Millimeters, x, y, 0, 0))
+            probed = nozzle.contactProbeCycle(target)
+            zs.append(probed.convertToUnits(LengthUnit.Millimeters).getZ())
+        if zs:
+            board_z = bl.getLocation().convertToUnits(LengthUnit.Millimeters).getZ()
+            tilt = max(zs) - min(zs)
+            mean = sum(zs) / len(zs)
+            ok = ok and tilt <= cfg.get("max_tilt_mm", 0.15)
+            out.append("%s: probed Z %s, mean %.3f (board Z %.3f, diff %+.3f), tilt %.3f mm" % (
+                name, ", ".join("%.3f" % z for z in zs), mean, board_z, mean - board_z, tilt))
+    return ok, "; ".join(out) or "no enabled board"
 
 
 STEPS = dict((k[3:], v) for k, v in globals().items() if k.startswith("st_"))
