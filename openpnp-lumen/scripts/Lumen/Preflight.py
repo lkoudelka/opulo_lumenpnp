@@ -40,6 +40,8 @@ DEFAULT = {
         {"id": "vacuum_sensors", "on": True, "severity": "warn"},
         {"id": "job_readiness", "on": True, "severity": "fail"},
         {"id": "feeder_bus", "on": True, "severity": "fail", "min_version": ""},
+        {"id": "orientation", "on": True, "severity": "warn",
+         "_help": "uses Scripts > Lumen > Orientation Setup confirmations; skipped if that helper was never used"},
         {"id": "board_z", "on": False, "severity": "warn", "max_tilt_mm": 0.15,
          "_help": "lumen profile only. points: board name -> [[x, y], ...] board coordinates of BARE areas (no parts)",
          "points": {}},
@@ -169,6 +171,41 @@ def st_board_z(cfg, ctx):
             out.append("%s: probed Z %s, mean %.3f (board Z %.3f, diff %+.3f), tilt %.3f mm" % (
                 name, ", ".join("%.3f" % z for z in zs), mean, board_z, mean - board_z, tilt))
     return ok, "; ".join(out) or "no enabled board"
+
+
+def st_orientation(cfg, ctx):
+    """Optional orientation helper: confirmed marks vs current feeder rotations."""
+    import lumen.orientation as ori
+    path = os.path.join(oppnp.lumen_dir(scripting), "orientation.json")
+    if not os.path.isfile(path):
+        return None, "Orientation Setup not used (optional)"
+    st = ori.Store(path)
+    job = gui.getJobTab().getJob()
+    used = set(str(pl.getPart().getId()) for _, pl, placed in jobinfo.job_placements(job) if pl.getPart() and not placed)
+    bad, unchecked, ok = [], [], 0
+    for pid in sorted(used):
+        p = st.data["parts"].get(pid)
+        if not p or p.get("matters") is False:
+            continue
+        cad = p.get("cad") or {}
+        for f in machine.getFeeders():
+            if f.getPart() is None or str(f.getPart().getId()) != pid:
+                continue
+            fr = (p.get("feeders") or {}).get(str(f.getId()), {})
+            need, text = ori.status(True, cad.get("dot"), cad.get("confirmed"), fr.get("dot"), fr.get("confirmed"),
+                                    oppnp.feeder_rotation(f))
+            if text.startswith("CORRECT"):
+                ok += 1
+            elif text.startswith("MISMATCH"):
+                bad.append("%s/%s: %s" % (pid, f.getName(), text))
+            else:
+                unchecked.append(pid)
+    detail = "%d correct" % ok
+    if bad:
+        detail += "; " + "; ".join(bad[:4])
+    if unchecked:
+        detail += "; not confirmed: %s" % ", ".join(sorted(set(unchecked))[:6])
+    return not bad and not unchecked, detail
 
 
 STEPS = dict((k[3:], v) for k, v in globals().items() if k.startswith("st_"))

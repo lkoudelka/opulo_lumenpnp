@@ -243,7 +243,7 @@ end = time.time() + 120
 while not pf.run_btn.isEnabled() and time.time() < end:
     time.sleep(0.2)
 res = dict((row[0], row[1]) for row in pf.model.rows)
-check("preflight ran all steps", len(res) == 8 and "..." not in res.values(), res)
+check("preflight ran all steps", len(res) == 9 and "..." not in res.values() and res.get("orientation") == "SKIP", res)
 check("home / job / readiness / bus pass", all(res.get(k) == "PASS" for k in
       ("machine_enabled", "job_open", "home", "job_readiness", "feeder_bus")), res)
 

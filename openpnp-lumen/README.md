@@ -9,6 +9,7 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 | **Feeder Firmware Update** | Update Photon feeder firmware over the bus, feeders mounted, OpenPnP connected. Pick the binary, scan the bus, tick feeders (all / some / outdated), update with progress, log and result per feeder. | §7 | Feeder bus only |
 | **Job Readiness** | View limited to the open job: only its parts and feeders, quantity / remaining, part height, and precisely why a feeder is not usable. Optional: job feeders shown on their LEDs (green = ready, red = issue, off = not used). | §5 | LEDs only (on request) |
 | **Last Placements** | Newest placements first (placement journal). *Mark selected / last NOT placed* (the next run places it again), *Go to* (top camera over the part). | §6 | Camera move on *Go to* |
+| **Orientation Setup** (optional) | For the job's parts where orientation matters, two squares: **PIN 1 of the part in the feeder** (as seen from above / in the top camera, which can be shown) and **PIN 1 in the CAD footprint at 0 deg**. Click the pin-1 corner (4 corners = the 4 possible rotations) in each and the rotation in the feeder is calculated; *Confirm*, or *Confirm and apply* to set the feeder rotation. Pin 1 in CAD is detected automatically from the **KiCad `.kicad_pcb`** or from **KiCad copper Gerbers with X2 attributes**, and still confirmed in the squares. The list shows per part/feeder: auto / confirmed, CORRECT / MISMATCH / to check. Per-type hints (electrolytic: pin 1 = plus, the stripe marks minus; diode: cathode bar; IC: dot or notch). | §2 | Feeder rotation on *Apply* |
 | **Pick Offset Learning** | Per feeder: systematic pick error learned from the bottom-vision offsets, damped suggestion, *Apply* / *Undo* for Photon feeders, "made it worse" detection, orientation hint (vision corrects ~90°). Data is recorded in the lumen profile only. | §3, §2 | Feeder offset on *Apply* |
 | **Preflight** | One-click checklist from `~/.openpnp2/lumen/preflight.json`: machine enabled, job open, home (if needed), lights, nozzle tips, vacuum sensors, job readiness, job feeders answer on the bus (and minimum firmware). PASS / WARN / FAIL. | §4 | Homing (if enabled and needed), lights |
 
@@ -39,6 +40,20 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 ```
 
 Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer never replaces a file it did not create.
+
+### Orientation detection details
+- **KiCad:** pad "1" of each footprint is taken relative to the centre of all numbered pads, in the footprint's 0° frame.
+  - The conventions were validated against KiCad's own paste Gerber of a real board: 160/160 pads matched within 0.01 mm.
+  - Note: KiCad's library draws some packages rotated compared with datasheets (SOT-23: pins 1/2 on the left). That is why the helper always shows the CAD footprint.
+- **Gerber:** `%TO.P,<ref>,<pin>%` attributes on the copper layer, combined with the job's placement rotations. KiCad writes them with *Use extended X2 format* + *Include netlist attributes*; paste and mask layers do not carry them.
+- **Schematic:** a KiCad *schematic* (`.kicad_sch`) contains no pad geometry. Pin 1 position needs the board file or the copper Gerber.
+- **Marks:** **4 corner marks**, one per possible rotation (0/90/180/270).
+  - For 2-terminal polarized parts, pin 1 is an end. Click the corner on the clockwise side of that end (pin 1 left → top-left, bottom → bottom-left).
+  - The feeder square draws the footprint's pads (light) as they would sit in the feeder for the chosen corner, to compare with the real part or the camera image.
+  - 2-pin parts with R/C/L/FB designators are "not relevant", except electrolytic/tantalum footprints.
+- **Overrides:** "Toggle orientation matters" overrides the classification.
+- **Storage:** `~/.openpnp2/lumen/orientation.json` holds the sources, confirmations and applied rotations.
+- **Preflight:** the `orientation` step warns about mismatches and unconfirmed parts; it is skipped if the helper was never used.
 
 ## Configuration profiles: "original" and "lumen" (`profile/pnp_profile.py`)
 
@@ -103,6 +118,8 @@ tests/                  see below
 | `run_openpnp_headless.sh` | Library against the **real OpenPnP 2.6 classes** (stock simulated config): job analysis, Photon "not usable" reasons, journal, placed flags, go-to coordinates, machine tasks, exception carry-back |
 | `run_openpnp_ui_headless.sh` | The **menu scripts' own code** (Swing models, buttons' handlers), with only the window and message boxes faked: update dialog end to end via machine tasks and the simulator; Job Readiness + LEDs; Last Placements + mark not placed; Preflight |
 | `test_learning.py` | Learning statistics: systematic vs scatter, frame transform, step limit, epochs after correction / undo, "worse" detection, orientation hint |
+| `test_orientation.py` | Real Opulo boards: LQFP-48, SOIC-8, SOT-23 (KiCad orientation), diodes/LEDs, passives not relevant (145 footprint types); Gerber X2 detection == KiCad on all 81 parts of the ftp board; rotation arithmetic over all marks and rotations |
+| `run_orientation_headless.sh` | Orientation Setup with real OpenPnP classes and the real feeder mainboard: import, auto marks, two-square check by clicking, apply sets the Photon pick rotation, CORRECT status, store and reopen; **renders the dialogs to PNG** for review |
 | `test_profiles.py` | `pnp-profile` on a **copy of the real `~/.openpnp2`**, judged by the real OpenPnP 2.6: byte-exact round trip; the lumen profile loads with the intended settings and nothing else changed; tuning in lumen + calibration edit → back to original equals the same edit in the original profile **byte for byte**; lumen tuning restored; hooks follow the profile; foreign hooks protected |
 | `run_config_compat.sh` | Install into a **copy of the real `~/.openpnp2`**: no config file changed, OpenPnP loads it the same, the journal hook runs via OpenPnP's `Scripting.on()` and never raises, uninstall is clean |
 

@@ -35,7 +35,7 @@ check("feeders / parts loaded", len(m.getFeeders()) == int(sys.argv[2]) and len(
 
 sc = Scripting(File(os.path.join(sandbox, "scripts")))
 menu = sorted(os.listdir(os.path.join(sandbox, "scripts", "Lumen")))
-check("menu scripts present", menu == ["Feeder_Firmware_Update.py", "Job_Readiness.py", "Last_Placements.py", "Pick_Offset_Learning.py", "Preflight.py"], menu)
+check("menu scripts present", menu == ["Feeder_Firmware_Update.py", "Job_Readiness.py", "Last_Placements.py", "Orientation_Setup.py", "Pick_Offset_Learning.py", "Preflight.py"], menu)
 part = Part("R1")
 b = Board(); pl = Placement("C7"); pl.setPart(part); b.addPlacement(pl)
 bl = BoardLocation(b)
