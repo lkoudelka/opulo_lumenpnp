@@ -207,9 +207,90 @@ check("summary counts", "2 correct" in str(ui.summary.getText()), ui.summary.get
 p4 = render(ui.frame.content, "orientation-list-after.png")
 st = json.load(open(os.path.join(sandbox, "lumen", "orientation.json")))
 check("store: confirmations + applied rotation + source", st["parts"]["STM32F031C6"]["cad"]["confirmed"]
-      and st["parts"]["STM32F031C6"]["feeders"][str(f.getId())]["applied"] == -90.0 and st["sources"] == ["kicad:" + kicad])
+      and st["parts"]["STM32F031C6"]["feeders"][str(f.getId())]["applied"] == -90.0 and st["board_sources"] == {"name:feeder-mobo": ["kicad:" + kicad]} and st["sources"] == [])
 ui2 = load("Orientation_Setup.py")[0][cls]()
 check("reopen: sources reloaded, status kept", dict((r["part_id"], r) for r in ui2.model.rows)["STM32F031C6"]["status"].startswith("CORRECT"))
-_Sys.out.println("PNG: %s %s %s %s" % (p1, p2, p3, p4))
+
+# --- second board imported from a KiCad .pos only (no .kicad_pcb, no Gerber) -----------------
+import java.lang
+from java.io import File as _File
+from org.openpnp.gui.importer import KicadPosImporter
+from org.openpnp.model import Footprint, Package
+pos = os.path.join(outdir, "sensor-top.pos")
+fh = open(pos, "w")                           # Jython: close explicitly (no refcount flush)
+fh.write("""### Printed by KiCad version 9.0.0
+## Unit = mm, Angle = deg.
+# Ref     Val                   Package                                       PosX       PosY       Rot  Side
+C31       100n                  C_0402_1005Metric                          10.0950    94.2500  180.0000  top
+U31       STM32F031C6           LQFP-48_7x7mm_P0.5mm                       18.7500    95.6300   90.0000  top
+U32       MAX                   QFN-32-No-Paste                            30.0000    95.0000  -90.0000  top
+U33       STM32WBA65CIx         UFQFPN-48_STM                              18.7500    81.5800   90.0000  top
+U1        LDO                   DFN4-1x1_STM                                9.6900    92.8950  180.0000  top
+D31       SK6805_SIDE           LED-TEST                                    7.1550    90.7600    0.0000  top
+## End
+""")
+fh.close()
+pk = Package("LED-TEST")                      # a package with an imported footprint (pads named)
+fpr = Footprint()
+for n, x in (("1", -0.8), ("2", -0.3), ("3", 0.3), ("4", 0.8)):
+    pad = Footprint.Pad()
+    pad.setName(n)
+    pad.setX(x)
+    pad.setY(0.4 if n == "1" else 0.0)
+    pad.setWidth(0.3)
+    pad.setHeight(0.5)
+    fpr.addPad(pad)
+pk.setFootprint(fpr)
+Configuration.get().addPackage(pk)
+m = KicadPosImporter.getDeclaredMethod("parseFile", [_File, Abstract2DLocatable.Side, java.lang.Boolean.TYPE,
+                                                    java.lang.Boolean.TYPE, java.lang.Boolean.TYPE])
+m.setAccessible(True)
+pls = m.invoke(None, [_File(pos), Abstract2DLocatable.Side.Top, True, True, False])
+board2 = Board()
+board2.setName("sensor-pos-only")
+for pl in pls:
+    board2.addPlacement(pl)
+bl2 = BoardLocation(board2)
+bl2.setGlobalSide(Abstract2DLocatable.Side.Top)
+job2 = Job()
+job2.addBoardOrPanelLocation(bl2)
+gui = Gui(job2)
+check("OpenPnP .pos import: package id = footprint name", sorted(str(p.getPart().getPackage().getId()) for p in pls)[0]
+      == "C_0402_1005Metric", [str(p.getPart().getId()) for p in pls])
+g3, _ = load("Orientation_Setup.py")
+ui3 = g3[cls]()
+ui3.only.setSelected(False)
+ui3.add_library_dir(os.path.expanduser(os.environ.get("FEEDER_LIB", "~/claude/opulo/opulo_feeder/lib/kicad")))
+rows = dict((r["refs"], r) for r in ui3.model.rows)
+_Sys.out.println("\n".join("  %-4s %-26s %-6s %-5s %s" % (k, r["footprint"], r["matters"], r["cad_dot"], r["status"])
+                           for k, r in sorted(rows.items())))
+check("pos only: footprint confirmed on the first board -> confirmed here (from the table)", rows["U31"]["cad_dot"] == "TL"
+      and rows["U31"]["cad_ok"] and rows["U31"]["cad_source"].startswith("table:"), (rows["U31"]["cad_source"], rows["U31"]["status"]))
+check("pos only: footprint from the library -> auto, needs confirmation", rows["U32"]["cad_dot"] == "TL" and not rows["U32"]["cad_ok"]
+      and rows["U32"]["cad_source"] == "lib:QFN-32-No-Paste.kicad_mod", rows["U32"].get("cad_source"))
+check("pos only: footprint from the OpenPnP package (pads named) -> TL", rows["D31"]["cad_dot"] == "TL"
+      and rows["D31"]["cad_source"] == "openpnp-package")
+check("pos only: unknown footprint -> matters (U), CAD unknown", rows["U33"]["matters"] is True and rows["U33"]["cad_dot"] is None
+      and "unknown" in rows["U33"]["status"])
+check("pos only: U1 of this board does NOT take pin 1 of U1 of the other (mobo) board", rows["U1"]["cad_dot"] is None
+      and rows["U1"]["footprint"] == "DFN4-1x1_STM", rows["U1"])
+check("pos only: capacitor not relevant", rows["C31"]["matters"] is False)
+idx = [i for i, r in enumerate(ui3.model.rows) if r["refs"] == "U33"][0]
+ui3.table.setRowSelectionInterval(idx, idx)
+dlg = ui3.check()
+dlg.right.dot = "TL"
+dlg.confirm(False)
+st = json.load(open(os.path.join(sandbox, "lumen", "orientation.json")))
+check("manual confirmation stored per footprint (reused on every later board)", st["footprints"]["UFQFPN-48_STM"] ==
+      dict(st["footprints"]["UFQFPN-48_STM"], dot="TL", confirmed=True, source="manual"), st["footprints"].get("UFQFPN-48_STM"))
+check("footprint table learned from the mobo .kicad_pcb (confirmed: STM32 + diode; auto: electrolytic)",
+      st["footprints"]["LQFP-48_7x7mm_P0.5mm"]["confirmed"] and st["footprints"]["D_SOD-123"]["confirmed"]
+      and st["footprints"]["C_Elec_6.3x7.7"]["dot"] == "TL" and not st["footprints"]["C_Elec_6.3x7.7"]["confirmed"],
+      sorted(st["footprints"])[:6])
+p5 = render(ui3.frame.content, "orientation-list-pos-only.png")
+import shutil
+if os.environ.get("PNG_KEEP"):
+    shutil.copy(p5, os.environ["PNG_KEEP"])
+_Sys.out.println("PNG: %s %s %s %s %s" % (p1, p2, p3, p4, p5))
 _Sys.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 _Sys.exit(0 if all(results) else 1)
