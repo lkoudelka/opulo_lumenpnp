@@ -177,5 +177,89 @@ check("store: confirmed footprint not overwritten by an automatic TR, conflict r
       c == "TR" and st.data["footprints"]["LQFP-48"]["dot"] == "TL" and st.data["footprints"]["LQFP-48"]["confirmed"])
 st.save()
 check("store: footprint table persists", o.Store(st.path).data["footprints"]["LQFP-48"]["source"] == "manual")
+
+check("same_pattern: identical within 0.03 mm across a rounding boundary / different pins / moved pad",
+      o.same_pattern([("1", 0.0249, 0), ("2", 1, 0)], [("1", 0.0251, 0), ("2", 1, 0)])
+      and not o.same_pattern([("1", 0, 0), ("2", 1, 0)], [("2", 0, 0), ("1", 1, 0)])
+      and not o.same_pattern([("1", 0, 0), ("2", 1, 0)], [("1", 0, 0), ("2", 1.1, 0)]))
+print("pin-1 corner rule (per-axis, refuses ambiguous)")
+hdr = [(str(i + 1), (i % 2) * 2.54, -(i // 2) * 2.54) for i in range(10)]          # 2x5 header, pin 1 top-left
+check("2x5 pin header: TL (the corner a person sees)", o.classify_pin1(hdr)[0] == "TL", o.classify_pin1(hdr))
+check("1x3 row: pin 1 at the left end -> TL", o.classify_pin1([("1", -2, 0), ("2", 0, 0), ("3", 2, 0)])[0] == "TL")
+amb = [("1", -1.0, 1.0), ("2", 1.0, 1.0), ("MP", -3.0, -1.0), ("MP", 3.0, -1.0)]       # row inside wider mounting pads
+check("connector with mounting pads wider than the row: refused (ambiguous)", o.classify_pin1(amb)[0] is None
+      and "ambiguous" in o.classify_pin1(amb)[1], o.classify_pin1(amb))
+check("no pad 1: refused", o.classify_pin1([("A", 0, 0), ("K", 1, 0)]) == (None, "no pad named 1"))
+check("BGA: A1 is pin 1", o.classify_pin1([("A1", -1, 1), ("A2", 1, 1), ("B1", -1, -1), ("B2", 1, -1)])[0] == "TL")
+
+REAL = os.path.expanduser(os.environ.get("ORIENTATION_REAL_DATA", "~/claude/opulo/_testdata/wba65-panel"))
+if os.path.exists(os.path.join(REAL, "Panel.kicad_pcb")):
+    print("real KiCad 9.0.0 files (%s)" % REAL)
+    fps = o.parse_kicad_pcb_list(os.path.join(REAL, "Panel.kicad_pcb"))
+    g = o.parse_gerber(os.path.join(REAL, "Panel-top_copper.gbr"))
+    check("copper Gerber: KiCad X2, top copper, pin attributes", o.gerber_check(g) is None and g["software"].startswith("KiCad"),
+          (g["software"], g["function"]))
+    check("silkscreen Gerber refused (no pin data)", "not a copper layer" in o.gerber_check(o.parse_gerber(
+        os.path.join(REAL, "Panel-F_Silkscreen.gbr"))))
+    inst, bad, copies = o.gerber_instances(g["pads"])
+    check("21-up panel Gerber: 21 copies of every reference, split safely", copies == 21 and all(len(v) == 21 for v in inst.values())
+          and len(inst) >= 37, (copies, len(inst)))
+    check("tall connector J1 (copies 2.3 mm apart, pads 2.5 mm): refused, not guessed", list(bad) == ["J1"], bad)
+    # placements of ONE copy of the board, taken from the .kicad_pcb (= what its .pos says), matched onto Gerber copies
+    def bp(i):
+        a = math.radians(i["at"][2])
+        return [(n, i["at"][0] + x * math.cos(a) - y * math.sin(a), i["at"][1] + x * math.sin(a) + y * math.cos(a)) for n, x, y in i["pads"]]
+    def bbc(pts):
+        xs = [q[1] for q in pts]
+        ys = [q[2] for q in pts]
+        return ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+    tops = [i for i in fps if i["side"] == "top" and i["pins"] >= 2]
+    votes = {}
+    for i in tops:
+        ci = bbc(bp(i))
+        for ref, lst in inst.items():
+            for c in lst:
+                if len(set(q[0] for q in c["pads"])) == i["pins"]:
+                    k = (round(c["center"][0] - ci[0], 1), round(c["center"][1] - ci[1], 1))
+                    votes[k] = votes.get(k, 0) + 1
+    T = max(sorted(votes), key=lambda k: votes[k])
+    pl, truth = [], {}
+    for i in tops:
+        ci = bbc(bp(i))
+        want = sorted((n, len([1 for q in i["pads"] if q[0] == n])) for n in set(q[0] for q in i["pads"]))
+        hit = [r for r, lst in inst.items() for c in lst if math.hypot(c["center"][0] - ci[0] - T[0], c["center"][1] - ci[1] - T[1]) < 0.15
+               and sorted((n, len([1 for q in c["pads"] if q[0] == n])) for n in set(q[0] for q in c["pads"])) == want]
+        if len(hit) == 1 and hit[0] not in truth:
+            pl.append({"ref": hit[0], "x": i["at"][0] + T[0] + 5.0, "y": i["at"][1] + T[1] - 7.0, "rot": i["at"][2], "side": "top",
+                       "footprint": o.footprint_key(i["footprint"])})
+            truth[hit[0]] = i
+    r = o.match_gerber(g, pl)
+    okr = [ref for ref in truth if r["results"][ref]["ok"]]
+    same = [ref for ref in okr if r["results"][ref]["dot"] == truth[ref]["dot"]]
+    check("Gerber pin 1 == .kicad_pcb pin 1 for every verified part (one board copy)", len(okr) >= 30 and same == okr,
+          "%d/%d verified, %d agree" % (len(okr), len(pl), len(same)))
+    custom = sorted(set(o.footprint_key(truth[ref]["footprint"]) for ref in same if "_STM" in truth[ref]["footprint"]))
+    check("... including the custom ST footprints", len(custom) >= 4, custom)
+    t2 = [dict(p) for p in pl]
+    c0402 = [p for p in t2 if p["footprint"] == "C_0402_1005Metric"]
+    c0402[0]["rot"] = o.norm(c0402[0]["rot"] + 90)
+    r2 = o.match_gerber(g, t2)
+    check("Gerber: one capacitor with a wrong rotation in the job is flagged (pads differ)", not r2["results"][c0402[0]["ref"]]["ok"]
+          and "pads differ" in r2["results"][c0402[0]["ref"]]["reason"], r2["results"][c0402[0]["ref"]])
+    plp = [{"ref": i["ref"], "x": i["at"][0] - 83.5, "y": i["at"][1] + 138.0, "rot": i["at"][2], "side": "top",
+            "footprint": o.footprint_key(i["footprint"])} for i in fps if i["side"] == "top" and i["ref"] and "*" not in i["ref"]]
+    r3 = o.match_kicad_pcb(fps, plp)
+    check(".kicad_pcb: all 108 placements verified at one origin offset", r3["verified"] == len(plp) == 108, (r3["verified"], len(plp)))
+    t3 = [dict(p) for p in plp]
+    t3[0]["rot"] = o.norm(t3[0]["rot"] + 180)
+    t3[1]["x"] += 0.02
+    r4 = o.match_kicad_pcb(fps, t3)
+    check(".kicad_pcb: rotation off by 180 / position off by 0.02 mm -> that placement refused", not r4["results"][t3[0]["ref"]]["ok"]
+          and not r4["results"][t3[1]["ref"]]["ok"] and r4["verified"] == 106, (r4["results"][t3[0]["ref"]], r4["results"][t3[1]["ref"]]))
+    pos = o.parse_kicad_pos(os.path.join(REAL, "Panel-top.pos"))
+    check("real 7-up .pos (other revision): .kicad_pcb and Gerber refused as a whole", o.match_kicad_pcb(fps, pos)["refused"]
+          and o.match_gerber(g, pos)["refused"])
+else:
+    print("(real KiCad data not in %s: skipped)" % REAL)
 print("\n%d/%d checks passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

@@ -150,6 +150,48 @@ def _ref(fp):
     return None
 
 
+PIN1_NAMES = ("1", "A1")          # pad names taken as pin 1 (numbered parts, BGA)
+SURE, ZERO = 0.6, 0.25            # pin-1 offset / half body size per axis: >= SURE = that side, <= ZERO = centre
+
+
+def classify_pin1(pads):
+    """pads [(name, x, y)] in the footprint 0 deg frame, Y up -> (corner or None, note).
+
+    Pin 1 is located relative to the bounding box of the pads, normalised PER AXIS, so a long
+    part (pin header, connector, SOIC) gives the corner a person sees.  Pin 1 in the middle of
+    an edge (2-terminal parts, 1xN rows) gives the corner on the clockwise side of that edge.
+    Anything between the bands is refused ("ambiguous"): no guessing."""
+    named = [(n, x, y) for n, x, y in pads if n not in ("", None)]
+    if len(set(n for n, _, _ in named)) < 2:
+        return None, "fewer than 2 pins"
+    p1 = []
+    for name in PIN1_NAMES:
+        p1 = [(x, y) for n, x, y in named if n == name]
+        if p1:
+            break
+    if not p1:
+        return None, "no pad named 1"
+    xs = [x for _, x, _ in named]
+    ys = [y for _, _, y in named]
+    cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    hw, hh = (max(xs) - min(xs)) / 2.0, (max(ys) - min(ys)) / 2.0
+    vx = sum(x for x, _ in p1) / len(p1) - cx
+    vy = sum(y for _, y in p1) / len(p1) - cy
+    nx = vx / hw if hw > 1e-6 else 0.0
+    ny = vy / hh if hh > 1e-6 else 0.0
+
+    def band(n):
+        return "side" if abs(n) >= SURE else "centre" if abs(n) <= ZERO else "?"
+    bx, by = band(nx), band(ny)
+    if "?" in (bx, by) or (bx, by) == ("centre", "centre"):
+        return None, "ambiguous pin 1 position (%.2f / %.2f of the half body): set it in Check" % (nx, ny)
+    if bx == "side" and by == "side":
+        return ("T" if ny > 0 else "B") + ("R" if nx > 0 else "L"), ""
+    if bx == "side":
+        return EDGE_TO_CORNER["R" if nx > 0 else "L"], "pin 1 at the %s end" % ("right" if nx > 0 else "left")
+    return EDGE_TO_CORNER["T" if ny > 0 else "B"], "pin 1 at the %s end" % ("top" if ny > 0 else "bottom")
+
+
 def cad_info(footprint, ref, pads_local):
     """pads_local: [(number, x, y)] in the footprint 0 deg frame, Y up."""
     numbered = [(n, x, y) for n, x, y in pads_local if n not in ("", None)]
@@ -157,29 +199,26 @@ def cad_info(footprint, ref, pads_local):
     info = {"ref": ref, "footprint": footprint, "pins": len(pins), "pads": [[n, round(x, 4), round(y, 4)] for n, x, y in numbered],
             "dot": None, "matters": orientation_matters(ref, footprint, len(pins))}
     if numbered:
-        cx = sum(x for _, x, _ in numbered) / len(numbered)
-        cy = sum(y for _, _, y in numbered) / len(numbered)
-        p1 = [(x, y) for n, x, y in numbered if n == "1"]
-        if p1 and len(pins) >= 2:
-            x1 = sum(x for x, _ in p1) / len(p1)
-            y1 = sum(y for _, y in p1) / len(p1)
-            info["dot"] = dot_from_vector(x1 - cx, y1 - cy)
-            info["pin1"] = [round(x1 - cx, 4), round(y1 - cy, 4)]
+        info["dot"], info["note"] = classify_pin1(numbered)
+        p1 = [(x, y) for n, x, y in numbered if n in PIN1_NAMES]
+        if p1:
+            cx = sum(x for _, x, _ in numbered) / len(numbered)
+            cy = sum(y for _, _, y in numbered) / len(numbered)
+            info["pin1"] = [round(sum(x for x, _ in p1) / len(p1) - cx, 4), round(sum(y for _, y in p1) / len(p1) - cy, 4)]
     return info
 
 
-def parse_kicad_pcb(path):
-    """{ref: info} for top-side footprints; info['side'] marks bottom ones."""
+def parse_kicad_pcb_list(path):
+    """Every footprint of a .kicad_pcb (duplicate references kept, e.g. panels):
+    [info] with info['at'] = [x, y, rot] in the position-file frame (Y up) and 'side'."""
     f = open(path)
     try:
         root = _sexpr(f.read())
     finally:
         f.close()
-    out = {}
+    out = []
     for fp in _kids(root, "footprint") + _kids(root, "module"):
         ref = _ref(fp)
-        if not ref:
-            continue
         layer = (_kids(fp, "layer") or [[None, "F.Cu"]])[0][1]
         at = (_kids(fp, "at") or [["at", "0", "0"]])[0]
         pads = []
@@ -190,33 +229,55 @@ def parse_kicad_pcb(path):
             pads.append((p[1], float(pat[1]), -float(pat[2])))     # KiCad Y down -> Y up
         info = cad_info(fp[1], ref, pads)
         info["side"] = "bottom" if layer.startswith("B.") else "top"
-        info["at"] = [float(at[1]), -float(at[2]), float(at[3]) if len(at) > 3 else 0.0]
+        info["at"] = [float(at[1]), -float(at[2]), norm(float(at[3])) if len(at) > 3 else 0.0]
         info["source"] = "kicad:" + os.path.basename(path)
-        out[ref] = info
+        out.append(info)
     return out
 
 
+def parse_kicad_pcb(path):
+    """{ref: info} (last one wins for duplicate references; use parse_kicad_pcb_list for panels)."""
+    return dict((i["ref"], i) for i in parse_kicad_pcb_list(path) if i["ref"])
+
+
 # ---------------------------------------------------------------------------------------
-# Gerber X2 (copper layers exported by KiCad with netlist attributes: %TO.P,<ref>,<pin>*%)
+# Gerber X2 copper layer (KiCad: 'Use extended X2 format' + 'Include netlist attributes')
+# Every pad flash / pad region carries %TO.P,<ref>,<pin>[,<name>]*%.
 # ---------------------------------------------------------------------------------------
-def parse_gerber_pins(path):
-    """{ref: {pin: [(x, y)...]}} in board coordinates (mm, Y up) from %TO.P% attributes."""
+_UESC = re.compile(r"\\u([0-9A-Fa-f]{4})")
+
+
+def _unescape(s):
+    try:
+        ch = unichr
+    except NameError:
+        ch = chr
+    return _UESC.sub(lambda m: str(ch(int(m.group(1), 16))), s)
+
+
+def parse_gerber(path):
+    """{'software', 'function', 'pads': [(ref, pin, x, y)]} in mm, Y up, board coordinates.
+    A pad region (G36/G37) counts once, at the centre of its bounding box."""
     f = open(path)
     try:
         text = f.read()
     finally:
         f.close()
+    head = {}
+    for k in ("GenerationSoftware", "FileFunction"):
+        m = re.search(r"%TF\." + k + r",([^*%]*)\*%", text)
+        head[k] = m.group(1) if m else ""
     m = re.search(r"%FSLAX(\d)(\d)Y(\d)(\d)\*%", text)
     dec = int(m.group(2)) if m else 6
     scale = 25.4 if "%MOIN*%" in text else 1.0
-    pins = {}
+    pads = []
     cur = None
     x = y = 0.0
     region = None
     for blk in re.findall(r"%[^%]*%|[^%*]+\*", text):
         b = blk.strip()
         if b.startswith("%TO.P,"):
-            parts = b[6:-2].split(",")
+            parts = [_unescape(p) for p in b[6:-2].split(",")]
             cur = (parts[0], parts[1]) if len(parts) >= 2 else None
             continue
         if b.startswith("%TD"):
@@ -230,9 +291,9 @@ def parse_gerber_pins(path):
             continue
         if b.startswith("G37"):
             if cur and region:
-                rx = sum(p[0] for p in region) / len(region)
-                ry = sum(p[1] for p in region) / len(region)
-                pins.setdefault(cur[0], {}).setdefault(cur[1], []).append((rx, ry))
+                xs = [p[0] for p in region]
+                ys = [p[1] for p in region]
+                pads.append((cur[0], cur[1], (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0))
             region = None
             continue
         mx = re.search(r"X(-?\d+)", b)
@@ -243,36 +304,309 @@ def parse_gerber_pins(path):
             y = int(my.group(1)) / 10.0 ** dec * scale
         if region is not None and (mx or my):
             region.append((x, y))
-        if "D03" in b and cur:
-            pins.setdefault(cur[0], {}).setdefault(cur[1], []).append((x, y))
-    return pins
+        elif "D03" in b and cur:
+            pads.append((cur[0], cur[1], x, y))
+    return {"software": head["GenerationSoftware"], "function": head["FileFunction"], "pads": pads}
+
+
+def gerber_check(g):
+    """None if the file can be used, else why not."""
+    if not g["function"].startswith("Copper"):
+        return "not a copper layer (%s): use the top COPPER Gerber (F_Cu)" % (g["function"] or "no X2 file function")
+    if ",Top" not in g["function"] and ",L1," not in g["function"]:
+        return "not the TOP copper layer (%s)" % g["function"]
+    if not [p for p in g["pads"] if p[1]]:
+        return ("no pin attributes: export again with 'Use extended X2 format' and "
+                "'Include netlist attributes' (KiCad Plot dialog)")
+    return None
+
+
+LINK_STEPS = (0.3, 0.5, 0.8, 1.2, 1.8, 2.5, 3.5, 5.0)   # mm, pad-to-pad link distances tried in order
+
+
+def _clusters(pts, link):
+    """Single-linkage clusters of [(pin, x, y)] sorted by x."""
+    parent = list(range(len(pts)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(len(pts)):
+        j = i + 1
+        while j < len(pts) and pts[j][1] - pts[i][1] <= link:
+            if math.hypot(pts[j][1] - pts[i][1], pts[j][2] - pts[i][2]) <= link:
+                parent[root(i)] = root(j)
+            j += 1
+    cl = {}
+    for i, q in enumerate(pts):
+        cl.setdefault(root(i), []).append(q)
+    return sorted(cl.values(), key=lambda g_: min(q[1:] for q in g_))
+
+
+def _split_copies(lst, n, want):
+    """n copies of one reference: the smallest link distance giving exactly n clusters that each
+    hold exactly the expected pins (want = [(pin, pads per copy)]), AND the same clusters with the
+    link doubled (a clear gap between copies).  Else None: refused, never guessed."""
+    pts = sorted(lst, key=lambda q: (q[1], q[2]))
+    for link in LINK_STEPS:
+        cl = _clusters(pts, link)
+        if len(cl) < n:
+            return None
+        if len(cl) == n:
+            if not all(sorted((pin, len([1 for q in g_ if q[0] == pin])) for pin in set(q[0] for q in g_)) == want
+                       for g_ in cl):
+                return None
+            if len(_clusters(pts, 2 * link)) != n:
+                return None                 # copies closer than twice the pad spacing: not separable for sure
+            return cl
+    return None
+
+
+def _gcd(vals):
+    g_ = 0
+    for c in vals:
+        a, b = g_, c
+        while b:
+            a, b = b, a % b
+        g_ = a
+    return g_
+
+
+def gerber_instances(pads):
+    """Split the pads of every reference into its copies (a panel Gerber repeats references):
+    ({ref: [{'pads': [(pin, x, y)], 'center': (x, y), 'half': (w, h)}]}, {ref: why not}, copies).
+    The panel copy count is the one most references agree on; a reference that does not split
+    into exactly that many clearly separated, complete copies is refused."""
+    by = {}
+    for ref, pin, x, y in pads:
+        if pin:
+            by.setdefault(ref, []).append((pin, x, y))
+    cnts, gcds = {}, {}
+    for ref, lst in by.items():
+        cnt = {}
+        for pin, _, _ in lst:
+            cnt[pin] = cnt.get(pin, 0) + 1
+        cnts[ref] = cnt
+        gcds[ref] = _gcd(cnt.values())
+    votes = {}
+    for v in gcds.values():
+        votes[v] = votes.get(v, 0) + 1
+    copies = max(sorted(votes), key=lambda v: votes[v]) if votes else 1
+    out, bad = {}, {}
+    for ref, lst in by.items():
+        if gcds[ref] % copies:
+            bad[ref] = "%s has pads for %d copies, the panel has %d" % (ref, gcds[ref], copies)
+            continue
+        want = sorted((p, c // copies) for p, c in cnts[ref].items())
+        groups = [lst] if copies == 1 else _split_copies(lst, copies, want)
+        if groups is None:
+            bad[ref] = "the %d copies of %s are too close to separate for sure" % (copies, ref)
+            continue
+        out[ref] = []
+        for g_ in groups:
+            xs = [x for _, x, _ in g_]
+            ys = [y for _, _, y in g_]
+            out[ref].append({"pads": g_, "center": ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0),
+                             "half": ((max(xs) - min(xs)) / 2.0, (max(ys) - min(ys)) / 2.0)})
+    return out, bad, copies
+
+
+# ---------------------------------------------------------------------------------------
+# Verified matching of a CAD file to the job's placements
+#
+# placements: [{'ref', 'x', 'y', 'rot', 'side', 'footprint'}] as in the job (position-file
+# frame, mm).  Each placement gets {'ok': True, 'dot', 'pads', 'pins', 'source'} only if it is
+# found unambiguously in the file at one common origin offset (KiCad board: same reference,
+# footprint, side and rotation, position within 0.01 mm; Gerber: same reference, the pads of
+# exactly one copy around the position).  Otherwise {'ok': False, 'reason'}.
+# ---------------------------------------------------------------------------------------
+PCB_TOL = 0.01
+GERBER_TOL = 0.05
+
+
+def _offset(pairs, step):
+    """Most common translation (placement - file) of the candidate pairs, refined."""
+    votes = {}
+    for dx, dy in pairs:
+        k = (round(dx / step), round(dy / step))
+        votes[k] = votes.get(k, 0) + 1
+    if not votes:
+        return None
+    k = max(sorted(votes), key=lambda q: votes[q])      # deterministic: identical panel copies tie
+    near = [(dx, dy) for dx, dy in pairs if abs(dx - k[0] * step) <= step and abs(dy - k[1] * step) <= step]
+    return (sum(d[0] for d in near) / len(near), sum(d[1] for d in near) / len(near))
+
+
+def _summary(res, top, src, offset=None, refused=None):
+    ok = len([r for r in res.values() if r["ok"]])
+    return {"results": res, "verified": ok, "placements": top, "source": src, "offset": offset, "refused": refused}
+
+
+def match_kicad_pcb(fps, placements, src="kicad"):
+    top = [p for p in placements if p.get("side", "top") == "top"]
+    by = {}
+    for i in fps:
+        if i["side"] == "top" and i["ref"]:
+            by.setdefault(i["ref"], []).append(i)
+    names = set(footprint_key(i["footprint"]) for i in fps)
+
+    def same_fp(i, p):
+        """Package name = KiCad footprint name after a .pos import.  A job whose packages have other
+        names (made by hand, other importers) is matched by reference + position + rotation only."""
+        jf = footprint_key(p.get("footprint"))
+        return not jf or jf not in names or jf == footprint_key(i["footprint"])
+    pairs = [(p["x"] - i["at"][0], p["y"] - i["at"][1]) for p in top for i in by.get(p["ref"], [])
+             if same_fp(i, p) and abs(norm(i["at"][2] - p["rot"])) < 0.01]
+    off = _offset(pairs, PCB_TOL)
+    res = {}
+    support = 0
+    for p in top:
+        cands = by.get(p["ref"], [])
+        here = [i for i in cands if off and math.hypot(i["at"][0] + off[0] - p["x"], i["at"][1] + off[1] - p["y"]) <= PCB_TOL]
+        if not cands:
+            r = {"ok": False, "reason": "%s not in the board file" % p["ref"]}
+        elif not here:
+            r = {"ok": False, "reason": "position differs from the board file"}
+        elif len(here) > 1:
+            r = {"ok": False, "reason": "%d footprints %s at the same place" % (len(here), p["ref"])}
+        else:
+            i = here[0]
+            support += 1
+            if not same_fp(i, p):
+                r = {"ok": False, "reason": "footprint differs: board %s, job %s" % (footprint_key(i["footprint"]), p["footprint"])}
+            elif abs(norm(i["at"][2] - p["rot"])) >= 0.01:
+                r = {"ok": False, "reason": "rotation differs: board %+.1f, job %+.1f" % (i["at"][2], p["rot"])}
+            elif not i["dot"]:
+                r = {"ok": False, "reason": i.get("note") or "pin 1 unknown", "pins": i["pins"]}
+            else:
+                r = {"ok": True, "dot": i["dot"], "note": i.get("note", ""), "pads": i["pads"], "pins": i["pins"],
+                     "footprint": i["footprint"], "matters": i["matters"]}
+        r["source"] = src
+        res[p["ref"]] = r
+    if top and support < max(1, len(top) // 2):
+        return _summary(dict((p["ref"], {"ok": False, "source": src, "reason": "board file does not match the job"})
+                             for p in top), len(top), src, off,
+                        "only %d of %d placements found in the board file: other design or revision?" % (support, len(top)))
+    return _summary(res, len(top), src, off)
+
+
+def match_gerber(g, placements, src="gerber"):
+    top = [p for p in placements if p.get("side", "top") == "top"]
+    why = gerber_check(g)
+    if why:
+        return _summary(dict((p["ref"], {"ok": False, "source": src, "reason": why}) for p in top), len(top), src, None, why)
+    inst, bad, copies = gerber_instances(g["pads"])
+    # origin offset from parts whose pad centre is their origin (2-pad and symmetric parts: most of a board)
+    pairs = [(p["x"] - c["center"][0], p["y"] - c["center"][1]) for p in top for c in inst.get(p["ref"], [])]
+    off = _offset(pairs, GERBER_TOL)
+    res = {}
+    support = 0
+    for p in top:
+        cands = inst.get(p["ref"], [])
+        if p["ref"] in bad:
+            res[p["ref"]] = {"ok": False, "source": src, "reason": bad[p["ref"]]}
+            continue
+        if not cands:
+            res[p["ref"]] = {"ok": False, "source": src, "reason": "%s has no pads with pin attributes in the Gerber" % p["ref"]}
+            continue
+        dist = sorted((math.hypot(c["center"][0] + off[0] - p["x"], c["center"][1] + off[1] - p["y"]), k)
+                      for k, c in enumerate(cands)) if off else []
+        c = cands[dist[0][1]] if dist else None
+        tol = GERBER_TOL + (max(c["half"]) if c else 0.0)    # the origin may be off the pad centre, inside the part
+        if not dist or dist[0][0] > tol:
+            res[p["ref"]] = {"ok": False, "source": src, "reason": "no copy of %s at this position in the Gerber "
+                             "(footprint origin outside its pads?)" % p["ref"]}
+            continue
+        if len(dist) > 1 and dist[1][0] <= 3 * tol:
+            res[p["ref"]] = {"ok": False, "source": src, "reason": "two copies of %s near this position" % p["ref"]}
+            continue
+        support += 1
+        a = math.radians(-p["rot"])                            # board frame -> footprint 0 deg frame
+        cx, cy = c["center"]
+        local = [(pin, (x - cx) * math.cos(a) - (y - cy) * math.sin(a), (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
+                 for pin, x, y in c["pads"]]
+        info = cad_info(p["footprint"], p["ref"], local)
+        if not info["dot"]:
+            res[p["ref"]] = {"ok": False, "source": src, "reason": info.get("note") or "pin 1 unknown", "pins": info["pins"]}
+            continue
+        res[p["ref"]] = {"ok": True, "source": src, "dot": info["dot"], "note": info.get("note", ""), "pads": info["pads"],
+                         "pins": info["pins"], "footprint": p["footprint"], "matters": info["matters"]}
+    if top and support < max(1, len(top) // 2):
+        return _summary(dict((p["ref"], {"ok": False, "source": src, "reason": "Gerber does not match the job"}) for p in top),
+                        len(top), src, off, "only %d of %d placements found in the Gerber: other design or revision?"
+                        % (support, len(top)))
+    # the same footprint must show the same pad pattern on every part (else a rotation in the job is off)
+    groups = {}                                            # footprint -> [[pads, [refs]]]
+    for p in top:
+        r = res[p["ref"]]
+        if r["ok"] and footprint_key(p["footprint"]):       # only parts with a footprint (package) name
+            lst = groups.setdefault(footprint_key(p["footprint"]), [])
+            for grp in lst:
+                if same_pattern(grp[0], r["pads"]):
+                    grp[1].append(p["ref"])
+                    break
+            else:
+                lst.append([r["pads"], [p["ref"]]])
+    for k, lst in groups.items():
+        if len(lst) > 1:
+            main = max(lst, key=lambda grp: len(grp[1]))
+            for grp in lst:
+                if grp is not main:
+                    for ref in grp[1]:
+                        res[ref] = {"ok": False, "source": src, "reason": "pads differ from the other %s parts (%s): "
+                                    "rotation in the job?" % (k, ", ".join(main[1][:3]))}
+    return _summary(res, len(top), src, off)
+
+
+def same_pattern(a, b, tol=0.03):
+    """Two pad lists [(pin, x, y)] (footprint frame) are the same footprint: same pins, and every
+    pad of a has its own pad of the same pin in b within tol mm."""
+    if len(a) != len(b):
+        return False
+    left = list(b)
+    for n, x, y in a:
+        best = None
+        for k, (m, u, v) in enumerate(left):
+            if m == n and math.hypot(u - x, v - y) <= tol and (best is None or math.hypot(u - x, v - y) < best[0]):
+                best = (math.hypot(u - x, v - y), k)
+        if best is None:
+            return False
+        del left[best[1]]
+    return True
 
 
 def gerber_cad_info(pins_by_ref, placements):
-    """CAD info from Gerber pins + OpenPnP placements {ref: (rotation_deg, footprint_name)}:
-    the pin-1 vector is taken relative to the centre of all pads of the part and rotated
-    back by the placement rotation into the footprint 0 deg frame."""
+    """Legacy API (single board, unique references): pins {ref: {pin: [(x, y)]}} + placements
+    {ref: (rotation, footprint)} -> {ref: info}.  Use match_gerber for verified results."""
     out = {}
     for ref, pins in pins_by_ref.items():
         rot, fpname = placements.get(ref, (None, ""))
         if rot is None:
             continue
-        a = math.radians(-rot)
-        local = []
-        for n, pts in pins.items():
-            for (x, y) in pts:
-                local.append((n, x, y))
-        if not local:
+        pts = [(n, x, y) for n, lst in pins.items() for (x, y) in lst]
+        if not pts:
             continue
-        cx = sum(x for _, x, _ in local) / len(local)
-        cy = sum(y for _, _, y in local) / len(local)
-        rl = [(n, (x - cx) * math.cos(a) - (y - cy) * math.sin(a), (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
-              for n, x, y in local]
-        info = cad_info(fpname, ref, rl)
+        xs = [x for _, x, _ in pts]
+        ys = [y for _, _, y in pts]
+        cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+        a = math.radians(-rot)
+        local = [(n, (x - cx) * math.cos(a) - (y - cy) * math.sin(a), (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
+                 for n, x, y in pts]
+        info = cad_info(fpname, ref, local)
         info["side"] = "top"
         info["source"] = "gerber"
         out[ref] = info
     return out
+
+
+def parse_gerber_pins(path):
+    """Legacy API: {ref: {pin: [(x, y)...]}} from %TO.P% attributes."""
+    pins = {}
+    for ref, pin, x, y in parse_gerber(path)["pads"]:
+        pins.setdefault(ref, {}).setdefault(pin, []).append((x, y))
+    return pins
 
 
 # ---------------------------------------------------------------------------------------

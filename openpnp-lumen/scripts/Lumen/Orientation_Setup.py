@@ -38,6 +38,7 @@ from javax.swing import (BorderFactory, JButton, JCheckBox, JFileChooser, JFrame
                          JScrollPane, JTable, ListSelectionModel, WindowConstants)
 from javax.swing.filechooser import FileNameExtensionFilter
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
+from org.openpnp.model import LengthUnit, Placement
 from org.openpnp.util import MovableUtils
 from org.openpnp.util.UiUtils import submitUiMachineTask
 
@@ -327,7 +328,10 @@ class OrientationSetup(object):
     def __init__(self):
         self.store = ori.Store(os.path.join(oppnp.lumen_dir(scripting), "orientation.json"))
         self.log = oppnp.FileLog(scripting, "orientation")
-        self._parsed = {}          # (source, board) -> {ref: cad info}
+        self._parsed = {}          # (source, board) -> verified match result
+        self._files = {}           # path -> parsed .kicad_pcb / Gerber
+        self.unverified = {}       # (board, ref) -> why the file could not be used for it
+        self.last_import = ""
         self.fp_conflicts = {}
         self._lib_index = None
         self._lib_cache = {}
@@ -383,48 +387,66 @@ class OrientationSetup(object):
                                                    if s not in self.store.data["sources"]]
 
     def cad_for(self, bl):
+        """{ref: cad info} VERIFIED for this board; self.unverified[(board, ref)] = why not."""
         bkey = self.board_key(bl)
         cad = {}
         for src in self.sources_for(bkey):
-            found = self.load_source(src, bl, quiet=True)
-            for ref, i in found.items():
-                if ref not in cad or src.startswith("kicad:"):
-                    cad[ref] = i
+            res = self.load_source(src, bl, quiet=True)
+            for ref, r in res["results"].items():
+                if r["ok"]:
+                    if ref not in cad or src.startswith("kicad:"):
+                        cad[ref] = r
+                    self.unverified.pop((bkey, ref), None)
+                elif ref not in cad:
+                    self.unverified[(bkey, ref)] = "%s: %s" % (os.path.basename(src.split(":", 1)[1]), r["reason"])
         return cad
 
+    @staticmethod
+    def board_placements(bl):
+        """The board's placements in the position-file frame (mm), as the matchers expect them."""
+        out = []
+        for p in bl.getPlacementsHolder().getPlacements():
+            if p.getType() != Placement.Type.Placement:
+                continue
+            loc = p.getLocation().convertToUnits(LengthUnit.Millimeters)
+            part = p.getPart()
+            pk = str(part.getPackage().getId()) if part is not None and part.getPackage() is not None else ""
+            out.append({"ref": str(p.getId()), "x": loc.getX(), "y": loc.getY(), "rot": ori.norm(loc.getRotation()),
+                        "side": str(p.getSide()).lower(), "footprint": pk})
+        return out
+
     def load_source(self, src, bl, quiet=False):
-        key = (src, self.board_key(bl) if src.startswith("gerber:") else None)
+        """Verified match of a .kicad_pcb / copper Gerber to the placements of this board."""
+        key = (src, self.board_key(bl))
         if key in self._parsed:
             return self._parsed[key]
         kind, path = src.split(":", 1)
+        name = os.path.basename(path)
         try:
-            if kind == "kicad":
-                found = ori.parse_kicad_pcb(path)
-            else:
-                pl = {}
-                for p in bl.getPlacementsHolder().getPlacements():
-                    pk = p.getPart().getPackage().getId() if p.getPart() and p.getPart().getPackage() else ""
-                    pl[str(p.getId())] = (p.getLocation().getRotation(), pk)
-                found = ori.gerber_cad_info(ori.parse_gerber_pins(path), pl)
-                for i in found.values():
-                    i["source"] = "gerber:" + os.path.basename(path)
-            self._parsed[key] = found
-            good, bad = ori.learn_footprints(found.values())       # pin 1 by footprint name, for later boards
-            for k, i in good.items():
-                c = self.store.set_footprint(k, i, i["source"], False)
-                if c:
-                    self.fp_conflicts[k] = "%s says %s" % (i["source"], c)
-            for k, dots in bad.items():
-                self.fp_conflicts[k] = "refs disagree (%s) in %s" % (", ".join(dots), os.path.basename(path))
-            if not quiet:
-                self.log("imported %s: %d footprints, %d with pin 1" % (path, len(found),
-                                                                        len([i for i in found.values() if i["dot"]])))
-            return found
+            if path not in self._files:
+                self._files[path] = ori.parse_kicad_pcb_list(path) if kind == "kicad" else ori.parse_gerber(path)
+            pl = self.board_placements(bl)
+            res = (ori.match_kicad_pcb if kind == "kicad" else ori.match_gerber)(self._files[path], pl, kind + ":" + name)
         except (Exception, JavaException) as e:
-            if not quiet:
-                JOptionPane.showMessageDialog(self.frame, "Cannot read %s: %s" % (path, e))
-            self._parsed[key] = {}
-            return {}
+            res = {"results": {}, "verified": 0, "placements": 0, "refused": "cannot read %s: %s" % (name, e)}
+        self._parsed[key] = res
+        if kind == "kicad" and path in self._files:
+            # footprint-local pads of EVERY footprint in a board file are exact, whatever the job
+            learn = [i for i in self._files[path] if i["side"] == "top"]
+        else:                                                    # Gerber: only what was verified
+            learn = [dict(r, ref=ref, side="top") for ref, r in res["results"].items() if r["ok"]]
+        good, bad = ori.learn_footprints(learn)                  # pin 1 by footprint name, for later boards
+        for k, i in good.items():
+            c = self.store.set_footprint(k, i, i["source"], False)
+            if c:
+                self.fp_conflicts[k] = "%s says %s" % (i["source"], c)
+        for k, dots in bad.items():
+            self.fp_conflicts[k] = "refs disagree (%s) in %s" % (", ".join(dots), name)
+        if not quiet:
+            self.log("imported %s for %s: %d of %d placements verified%s" % (
+                path, self.board_key(bl), res["verified"], res["placements"],
+                "; REFUSED: " + res["refused"] if res.get("refused") else ""))
+        return res
 
     def import_file(self, kind):
         ch = JFileChooser(self.store.data.get("last_dir") or os.path.expanduser("~"))
@@ -438,7 +460,7 @@ class OrientationSetup(object):
         self.add_source(kind, path)
 
     def add_source(self, kind, path):
-        """Import for the board(s) of the open job (refs are only meaningful on their own board)."""
+        """Import for the board(s) of the open job; used only where it is verified against the job."""
         job = gui.getJobTab().getJob()
         bls = [bl for bl in (job.getBoardLocations() if job is not None else []) if bl.getBoard() is not None]
         if not bls:
@@ -447,16 +469,31 @@ class OrientationSetup(object):
         src = "%s:%s" % (kind, path)
         for k in [k for k in self._parsed if k[0] == src]:
             del self._parsed[k]
-        n = 0
+        self._files.pop(path, None)
+        lines = []
+        seen = set()
         for bl in bls:
-            n = max(n, len(self.load_source(src, bl)))
-            if n:
-                lst = self.store.data["board_sources"].setdefault(self.board_key(bl), [])
-                if src not in lst:
-                    lst.append(src)
-        if kind == "gerber" and n == 0:
-            JOptionPane.showMessageDialog(self.frame, "No pin attributes found. Use a COPPER layer exported by KiCad\n"
-                                          "with 'Use extended X2 format' and 'Include netlist attributes'.")
+            bkey = self.board_key(bl)
+            if bkey in seen:
+                continue
+            seen.add(bkey)
+            res = self.load_source(src, bl)
+            bname = bl.getBoard().getName() or bkey
+            if res.get("refused"):
+                lines.append("%s: NOT USED - %s" % (bname, res["refused"]))
+                continue
+            lst = self.store.data["board_sources"].setdefault(bkey, [])
+            if src not in lst:
+                lst.append(src)
+            why = {}
+            for ref, r in sorted(res["results"].items()):
+                if not r["ok"]:
+                    why.setdefault(r["reason"], []).append(ref)
+            lines.append("%s: %d of %d placements verified (pin 1 from the file)." % (bname, res["verified"], res["placements"]))
+            for reason, refs in sorted(why.items(), key=lambda kv: -len(kv[1]))[:8]:
+                lines.append("   not verified (%d): %s - %s" % (len(refs), ", ".join(refs[:6]) + (" ..." if len(refs) > 6 else ""), reason))
+        self.last_import = "\n".join(lines)
+        JOptionPane.showMessageDialog(self.frame, "%s\n\n%s" % (os.path.basename(path), self.last_import))
         self.store.data["last_dir"] = os.path.dirname(path)
         self.store.save()
         self.refresh()
@@ -529,11 +566,13 @@ class OrientationSetup(object):
                 if bk not in cads:
                     cads[bk] = self.cad_for(bl)
                     self.board_srcs.update(self.sources_for(bk))
-                ent = by_part.setdefault(str(part.getId()), (part, [], []))
+                ent = by_part.setdefault(str(part.getId()), (part, [], [], []))
                 ent[1].append(str(pl.getId()))
                 if str(pl.getId()) in cads[bk]:
                     ent[2].append(cads[bk][str(pl.getId())])
-        for pid, (part, refs, infos) in sorted(by_part.items()):
+                elif (bk, str(pl.getId())) in self.unverified:
+                    ent[3].append("%s %s" % (pl.getId(), self.unverified[(bk, str(pl.getId()))]))
+        for pid, (part, refs, infos, unver) in sorted(by_part.items()):
             dots = sorted(set(i["dot"] for i in infos if i["dot"]))
             fkey, fp = self.footprint(part, infos)
             sp = self.store.data["parts"].get(pid, {})
@@ -573,6 +612,8 @@ class OrientationSetup(object):
                 need, st = ori.status(matters, cad_dot, x["cad_ok"], x["feeder_dot"], x["feeder_ok"], x["feeder_rot"])
                 if f is None and matters is not False and cad_dot:
                     st = "no feeder has this part" + ("" if x["cad_ok"] else " (CAD mark not confirmed)")
+                if unver:                                  # a CAD file is loaded but could not verify these refs
+                    st = "NOT VERIFIED %s; %s" % ("; ".join(unver[:2]) + (" +%d" % (len(unver) - 2) if len(unver) > 2 else ""), st)
                 x["need"], x["status"] = need, note + st
                 rows.append(x)
         shown = [x for x in rows if not self.only.isSelected() or x["matters"] is not False]
