@@ -52,6 +52,18 @@ for d in sorted(glob.glob("/dev/video*")):
                 print("camera %s -> '%s %s' (%s)" % (role, card, bus, d))
 open(p, "w").write(s)
 PY
+if [ -n "$BENCH_HOME_FID" ]; then    # e.g. "218.295,107.114": home on another fiducial (main one covered)
+    python3 - "$WORK/sandbox/machine.xml" "$BENCH_HOME_FID" <<'PY'
+import re, sys
+p, xy = sys.argv[1], sys.argv[2].split(",")
+s = open(p).read()
+s, n = re.subn(r'<homing-fiducial-location units="Millimeters" x="[-\d.]+" y="[-\d.]+"',
+               '<homing-fiducial-location units="Millimeters" x="%s" y="%s"' % (xy[0], xy[1]), s, count=1)
+assert n == 1
+open(p, "w").write(s)
+print("configuration copy: visual homing on the fiducial at %s/%s" % tuple(xy))
+PY
+fi
 TRACE="$OUT/bench-openpnp-trace-$(date +%Y%m%d-%H%M%S).log"
 echo "OpenPnP TRACE log: $TRACE"
 "$JAVA" -Djava.awt.headless=true --add-opens=java.base/java.lang=ALL-UNNAMED \
