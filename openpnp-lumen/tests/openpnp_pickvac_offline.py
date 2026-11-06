@@ -16,6 +16,7 @@ for n in ("Feeder.BeforeFeed.py", "Nozzle.AfterPick.py"):
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 from java.io import File
 from java.lang import System as S
+from java.lang import Throwable
 from java.util import HashMap
 from org.openpnp.model import Configuration
 Configuration.initialize(File(sandbox))
@@ -87,6 +88,7 @@ check("logged in feedwatch log", "PICKVAC" in txt and "edge pick" in txt, txt.st
 # the next feed: before_feed sees the request; check_feeder replaced (it would move the camera)
 from lumen import feedwatch, feedercheck
 calls = []
+_real_check = feedercheck.check_feeder
 feedercheck.check_feeder = lambda m, f, save=None: calls.append(f.getName()) or {"error": "camera replaced in this test"}
 feedwatch.before_feed(machine, f48, fake)
 check("next feed: the forced camera check runs once (feeder not ticked 'While feeding')", len(calls) == 1, calls)
@@ -101,6 +103,43 @@ S.setProperty("lumen.lastfeed." + str(n1.getId()), json.dumps({"feeder": "X", "n
 settings({"pickvac": {"enabled": True}})
 from lumen import pickvac
 check("manual pick (no recent feed on this nozzle): not judged", pickvac.after_pick(machine, fake, f48.getPart()) is None)
+
+S.out.println("action 'recycle, synchronise and pick again' (repick)")
+S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
+part = f48.getPart()
+old_retry = part.getPickRetryCount()
+settings({"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": "repick"}})
+part.setPickRetryCount(0)
+FakeNozzle.level = 230
+fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
+raised = None
+try:
+    fire("Nozzle.AfterPick", nozzle=fake, part=part)
+except (Exception, Throwable) as e:
+    raised = e
+check("part pick retry count 0: no exception (job not stopped), only re-centring requested",
+      raised is None and S.getProperty("lumen.feedwatch.force.001980104648570520333535") == "1", raised)
+S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
+part.setPickRetryCount(2)
+fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
+raised = None
+try:
+    fire("Nozzle.AfterPick", nozzle=fake, part=part)
+except (Exception, Throwable) as e:
+    raised = e
+check("pick retry count 2: the hook makes the pick FAIL (OpenPnP then discards and picks again)",
+      raised is not None and "RECYCLE" in str(raised), str(raised)[:160])
+check("... and the re-feed will re-centre (synchronise)", S.getProperty("lumen.feedwatch.force.001980104648570520333535") == "1")
+FakeNozzle.level = 224
+raised = None
+try:
+    fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
+    fire("Nozzle.AfterPick", nozzle=fake, part=part)
+except (Exception, Throwable) as e:
+    raised = e
+check("good pick with action repick: no exception", raised is None, raised)
+part.setPickRetryCount(old_retry)
+S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
 
 S.out.println("identify packet (fake transport)")
 sent = []
