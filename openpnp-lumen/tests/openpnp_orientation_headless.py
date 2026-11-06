@@ -82,7 +82,11 @@ class Gui(object):
 
 
 # parts named like the board's footprints, placements = refs of the real board
-spec = [("U1", "STM32F031C6", 90.0), ("D6", "D-SOD123", 0.0), ("C12", "CP-6.3x7.7", -90.0), ("R1", "R0805", 0.0)]
+# positions + rotations exactly as KiCad's .pos would give them (board origin), so the import verifies
+from lumen import orientation as _ori
+_at = dict((i["ref"], i["at"]) for i in _ori.parse_kicad_pcb_list(kicad) if i["ref"])
+spec = [("U1", "STM32F031C6", _at["U1"][2]), ("D6", "D-SOD123", _at["D6"][2]), ("C12", "CP-6.3x7.7", _at["C12"][2]),
+        ("R1", "R0805", _at["R1"][2])]
 parts, feeders = {}, {}
 board = Board()
 board.setName("feeder-mobo")
@@ -93,7 +97,7 @@ for slot, (ref, pid, rot) in enumerate(spec, start=2):
     parts[pid] = p
     pl = Placement(ref)
     pl.setPart(p)
-    pl.setLocation(Location(mm, 10, 10, 0, rot))
+    pl.setLocation(Location(mm, _at[ref][0] - 100.0, _at[ref][1] + 50.0, 0, rot))   # any common origin offset
     pl.setSide(Abstract2DLocatable.Side.Top)
     board.addPlacement(pl)
     f = PhotonFeeder()
@@ -208,6 +212,25 @@ p4 = render(ui.frame.content, "orientation-list-after.png")
 st = json.load(open(os.path.join(sandbox, "lumen", "orientation.json")))
 check("store: confirmations + applied rotation + source", st["parts"]["STM32F031C6"]["cad"]["confirmed"]
       and st["parts"]["STM32F031C6"]["feeders"][str(f.getId())]["applied"] == -90.0 and st["board_sources"] == {"name:feeder-mobo": ["kicad:" + kicad]} and st["sources"] == [])
+# top copper Gerber (KiCad X2 style) written from the same board's pads: verified import in the GUI
+import math as _mth
+gl = ["%TF.GenerationSoftware,KiCad,Pcbnew,9.0.0*%", "%TF.FileFunction,Copper,L1,Top*%", "%FSLAX46Y46*%", "%MOMM*%",
+      "%ADD10C,0.3*%", "D10*"]
+for i in _ori.parse_kicad_pcb_list(kicad):
+    if i["side"] != "top" or not i["ref"]:
+        continue
+    a_ = _mth.radians(i["at"][2])
+    for n_, px, py in i["pads"]:
+        gx = i["at"][0] - 100.0 + px * _mth.cos(a_) - py * _mth.sin(a_)
+        gy = i["at"][1] + 50.0 + px * _mth.sin(a_) + py * _mth.cos(a_)
+        gl += ["%%TO.P,%s,%s*%%" % (i["ref"], n_), "X%dY%dD03*" % (round(gx * 1e6), round(gy * 1e6)), "%TD*%"]
+gpath = os.path.join(outdir, "mobo-F_Cu.gbr")
+fh = open(gpath, "w")
+fh.write("\n".join(gl + ["M02*"]))
+fh.close()
+ui.add_source("gerber", gpath)
+_Sys.out.println(ui.last_import)
+check("GUI: top copper Gerber import verified 4 of 4", "4 of 4 placements verified" in ui.last_import, ui.last_import)
 ui2 = load("Orientation_Setup.py")[0][cls]()
 check("reopen: sources reloaded, status kept", dict((r["part_id"], r) for r in ui2.model.rows)["STM32F031C6"]["status"].startswith("CORRECT"))
 
@@ -288,6 +311,68 @@ check("footprint table learned from the mobo .kicad_pcb (confirmed: STM32 + diod
       and st["footprints"]["C_Elec_6.3x7.7"]["dot"] == "TL" and not st["footprints"]["C_Elec_6.3x7.7"]["confirmed"],
       sorted(st["footprints"])[:6])
 p5 = render(ui3.frame.content, "orientation-list-pos-only.png")
+
+# --- real KiCad 9 data (optional): ~/claude/opulo/_testdata/wba65-panel -------------------------
+REAL = os.path.expanduser(os.environ.get("ORIENTATION_REAL_DATA", "~/claude/opulo/_testdata/wba65-panel"))
+if os.path.exists(os.path.join(REAL, "Panel.kicad_pcb")):
+    import math as _m
+
+    def pos_job(name, rows):
+        path = os.path.join(outdir, name + ".pos")
+        fh = open(path, "w")
+        fh.write("### Printed by KiCad version 9.0.0\n## Unit = mm, Angle = deg.\n# Ref Val Package PosX PosY Rot Side\n")
+        for r in rows:
+            fh.write("%-8s %-12s %-40s %10.4f %10.4f %9.4f  top\n" % (r["ref"], "v", r["footprint"], r["x"], r["y"], r["rot"]))
+        fh.write("## End\n")
+        fh.close()
+        pls = m.invoke(None, [_File(path), Abstract2DLocatable.Side.Top, True, True, False])
+        b = Board()
+        b.setName(name)
+        for pl in pls:
+            b.addPlacement(pl)
+        bl_ = BoardLocation(b)
+        bl_.setGlobalSide(Abstract2DLocatable.Side.Top)
+        j = Job()
+        j.addBoardOrPanelLocation(bl_)
+        return j
+
+    pcbp = os.path.join(REAL, "Panel.kicad_pcb")
+    fps = _ori.parse_kicad_pcb_list(pcbp)
+    rows = [{"ref": i["ref"], "x": i["at"][0] - 83.5, "y": i["at"][1] + 138.0, "rot": i["at"][2],
+             "footprint": _ori.footprint_key(i["footprint"])} for i in fps
+            if i["side"] == "top" and i["ref"] and "*" not in i["ref"] and i["pins"] >= 1]
+    gui = Gui(pos_job("wba65-from-pcb", rows))
+    g4, _ = load("Orientation_Setup.py")
+    ui4 = g4[cls]()
+    ui4.add_source("kicad", pcbp)
+    check("real KiCad 9 panel: every placement verified from the .kicad_pcb", "%d of %d placements verified" % (len(rows), len(rows))
+          in ui4.last_import, ui4.last_import)
+    rr = dict((_ori.footprint_key(r["footprint"]), r) for r in ui4.model.rows)
+    check("real panel: UFQFPN-48_STM pin 1 TL, ZDO_1610 TL, crystal 2016 BL (verified, from the board)",
+          rr["UFQFPN-48_STM"]["cad_dot"] == "TL" and rr["ZDO_1610_STM"]["cad_dot"] == "TL"
+          and rr["Crystal_SMD_2016-4Pin_2.0x1.6mm_abracon"]["cad_dot"] == "BL"
+          and rr["UFQFPN-48_STM"]["cad_source"] == "kicad:Panel.kicad_pcb", [(k, r["cad_dot"]) for k, r in sorted(rr.items())][:6])
+    # the real 7-up .pos of another revision against this board file: refused, nothing used
+    gui = Gui(pos_job("wba65-7up", [dict(r, rot=r["rot"]) for r in _ori.parse_kicad_pos(os.path.join(REAL, "Panel-top.pos"))
+                                     if "*" not in r["ref"]]))
+    g5, _ = load("Orientation_Setup.py")
+    ui5 = g5[cls]()
+    ui5.add_source("kicad", pcbp)
+    k5 = ui5.last_import
+    ui5.add_source("gerber", os.path.join(REAL, "Panel-top_copper.gbr"))
+    check("real .pos of another revision: board file and Gerber both REFUSED (NOT USED)", "NOT USED" in k5
+          and "NOT USED" in ui5.last_import and "other design or revision" in ui5.last_import, (k5, ui5.last_import))
+    rr5 = dict((_ori.footprint_key(r["footprint"]), r) for r in ui5.model.rows)
+    check("... but pin 1 by footprint NAME from the board file's footprints: auto, to confirm",
+          rr5["ZDO_1610_STM"]["cad_dot"] == "TL" and not rr5["ZDO_1610_STM"]["cad_ok"]
+          and rr5["ZDO_1610_STM"]["cad_source"] == "table:kicad:Panel.kicad_pcb", rr5["ZDO_1610_STM"].get("cad_source"))
+    st5 = json.load(open(os.path.join(sandbox, "lumen", "orientation.json")))
+    check("refused files are not bound to the board", "name:wba65-7up" not in st5["board_sources"], st5["board_sources"].keys())
+    ui5.add_source("gerber", os.path.join(REAL, "Panel-F_Silkscreen.gbr"))
+    check("silkscreen Gerber refused: no pin data", "not a copper layer" in ui5.last_import, ui5.last_import)
+    _Sys.out.println(ui4.last_import)
+else:
+    _Sys.out.println("(real data not found in %s: skipped)" % REAL)
 import shutil
 if os.environ.get("PNG_KEEP"):
     shutil.copy(p5, os.environ["PNG_KEEP"])

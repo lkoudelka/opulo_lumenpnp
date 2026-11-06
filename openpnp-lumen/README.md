@@ -42,10 +42,26 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer never replaces a file it did not create.
 
 ### Orientation detection details
-- **KiCad:** pad "1" of each footprint is taken relative to the centre of all numbered pads, in the footprint's 0° frame.
-  - The conventions were validated against KiCad's own paste Gerber of a real board: 160/160 pads matched within 0.01 mm.
-  - Note: KiCad's library draws some packages rotated compared with datasheets (SOT-23: pins 1/2 on the left). That is why the helper always shows the CAD footprint.
-- **Gerber:** `%TO.P,<ref>,<pin>%` attributes on the copper layer, combined with the job's placement rotations. KiCad writes them with *Use extended X2 format* + *Include netlist attributes*; paste and mask layers do not carry them.
+- **Verified import (`.kicad_pcb` or top copper Gerber):** a file is used for a placement only when it is proven to belong to the job. Nothing is guessed; every refusal says why (import dialog, list status `NOT VERIFIED ...`, `orientation-check.sh`).
+
+  | | `.kicad_pcb` | top copper Gerber (`F_Cu`, KiCad X2) |
+  |---|---|---|
+  | Needs | the board file | *Use extended X2 format* + *Include netlist attributes* (both on in your files). Silkscreen, paste and mask have no pin data and are refused. |
+  | Pin 1 from | footprint-local pads (exact) | pads of the part on the board, turned back by the job's rotation |
+  | Proof it is the same board as the job | per placement: same reference, footprint name, side, rotation (0.01°), position within 0.01 mm at one common origin offset | per placement: same reference, exactly one copy of the part at the position (one common origin offset), and every part of a footprint shows the same pad pattern (catches a single wrong rotation in the job) |
+  | Whole file refused when | fewer than half of the placements are found (other design / revision) | same, or not KiCad top copper with pin attributes |
+  | Panels with repeated references | matched by position | the copies are split only if all references give the same copy count AND the split is unchanged with twice the link distance (clear gap); else that reference is refused |
+
+  - **Pin-1 corner rule:** pin 1 relative to the pads' bounding box, normalised per axis. At least 0.6 of the half size on both axes gives a corner. At least 0.6 on one axis and no more than 0.25 on the other gives an end (the corner clockwise of it). Anything in between, no pad "1"/"A1", or pin 1 in the centre is refused, and you set it in *Check*. Pin headers and connectors give the corner a person sees.
+  - **Validated on real KiCad 9.0.0 files** (`~/claude/opulo/_testdata/wba65-panel`, outside the repo):
+    - `.kicad_pcb`: 108/108 placements verified; a 180° rotation or a 0.02 mm shift of one placement is refused.
+    - The 21-up panel Gerber splits into 21 copies of 37 references; only J1 is refused (copies 2.3 mm apart).
+    - Gerber pin 1 = `.kicad_pcb` pin 1 for 35/35 parts, including the custom ST footprints.
+    - The antenna (origin off its pads) is refused.
+    - A `.pos` of another revision is refused by both files.
+  - **Before the job, at the desk:** `~/claude/opulo/_tools/orientation-check.sh BOARD-top.pos --pcb BOARD.kicad_pcb --gerber BOARD-F_Cu.gbr`. Exit 0 = every relevant part verified, 1 = some need manual confirmation, 2 = a file was refused.
+  - KiCad's library draws some packages rotated compared with datasheets (SOT-23: pins 1/2 on the left). That is why the helper always shows the CAD footprint.
+  - A `.kicad_pcb` also fills the footprint table with all its footprints (exact footprint-local data, marked auto), even when the board is another revision. Gerber data is learned only where verified.
 - **Position file only (`.pos`, also what assembly partners get with the BOM):**
   - The `.pos` file has no pad data, only footprint name + rotation, and the BOM / CPL add nothing about pin 1 (LCSC numbers point to EasyEDA footprints, whose 0° differs from KiCad's).
   - Pin 1 in the footprint's 0° frame is a property of the **footprint**, the same on every board, so it is looked up by the name OpenPnP's KiCad importer gives the package (= `Package` column). Order: confirmed footprint-table entry, OpenPnP package footprint (pads named, e.g. from *Import KiCad .kicad_mod*), footprint library, auto entry learned from an earlier board/Gerber.
