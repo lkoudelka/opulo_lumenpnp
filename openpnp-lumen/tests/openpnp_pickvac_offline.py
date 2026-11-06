@@ -104,42 +104,88 @@ settings({"pickvac": {"enabled": True}})
 from lumen import pickvac
 check("manual pick (no recent feed on this nozzle): not judged", pickvac.after_pick(machine, fake, f48.getPart()) is None)
 
-S.out.println("action 'recycle, synchronise and pick again' (repick)")
-S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
+S.out.println("actions 'return to feeder / discard, synchronise and pick again'")
+from lumen import pickvac
+from org.openpnp.machine.reference import ReferenceFeeder
+FORCE = "lumen.feedwatch.force.001980104648570520333535"
 part = f48.getPart()
 old_retry = part.getPickRetryCount()
-settings({"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": "repick"}})
-part.setPickRetryCount(0)
-FakeNozzle.level = 230
-fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
-raised = None
-try:
-    fire("Nozzle.AfterPick", nozzle=fake, part=part)
-except (Exception, Throwable) as e:
-    raised = e
-check("part pick retry count 0: no exception (job not stopped), only re-centring requested",
-      raised is None and S.getProperty("lumen.feedwatch.force.001980104648570520333535") == "1", raised)
-S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
+returned = []
+
+
+def fake_take_back(feeder, nozzle):
+    """stands for OpenPnP's takeBackPart (it would move the nozzle): Photon then sets SkipNext"""
+    returned.append(feeder.getName())
+    feeder.setFeedOptions(ReferenceFeeder.FeedOptions.SkipNext)
+pickvac.take_back = fake_take_back
+
+
+def edge_pick(action, retries, level=230):
+    S.clearProperty(FORCE)
+    f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
+    settings({"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": action}})
+    part.setPickRetryCount(retries)
+    FakeNozzle.level = level
+    pickvac.remember_feed(fake, f48)
+    try:
+        return pickvac.after_pick(machine, fake, part), None
+    except (Exception, Throwable) as e:
+        return None, e
+
+
+r, e = edge_pick("return", 2)
+check("return: part put back into the feeder pocket (OpenPnP takeBackPart), Photon SkipNext",
+      returned == [f48.getName()] and f48.getFeedOptions().name() == "SkipNext", returned)
+check("return: pick made to fail ('RETURNED ... pick the same part again'), re-centring requested",
+      e is not None and "RETURNED" in str(e) and S.getProperty(FORCE) == "1", str(e)[:120])
+del returned[:]
+f48.setFeedOptions(ReferenceFeeder.FeedOptions.SkipNext)
+S.clearProperty(FORCE)
+settings({"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": "return"}})
 part.setPickRetryCount(2)
+FakeNozzle.level = 230
+pickvac.remember_feed(fake, f48)
+try:
+    pickvac.after_pick(machine, fake, part)
+    e = None
+except (Exception, Throwable) as x:
+    e = x
+check("return impossible (feeder not in Normal feed mode): falls back to discard, nothing taken back",
+      e is not None and "DISCARD" in str(e) and not returned, str(e)[:160])
+
+
+def failing_take_back(feeder, nozzle):
+    from java.lang import IllegalStateException
+    raise IllegalStateException("part-off check failed")
+pickvac.take_back = failing_take_back
+r, e = edge_pick("return", 2)
+check("take-back fails (Java exception): falls back to discard", e is not None and "return to the feeder failed" in str(e)
+      and "DISCARD" in str(e), str(e)[:160])
+pickvac.take_back = fake_take_back
+r, e = edge_pick("discard", 2)
+check("discard: pick made to fail with DISCARD, nothing returned", e is not None and "DISCARD" in str(e) and not returned)
+r, e = edge_pick("return", 0)
+check("retry count 0: no exception, only re-centring", e is None and r["action"] == "recenter" and S.getProperty(FORCE) == "1", r)
+r, e = edge_pick("repick", 2)
+check("old setting 'repick' = discard", e is not None and "DISCARD" in str(e))
+r, e = edge_pick("return", 2, level=224)
+check("good pick: nothing", e is None and not r["flagged"])
+S.out.println("through OpenPnP's Scripting.on (the exception OpenPnP's pick receives)")
+S.clearProperty(FORCE)
+settings({"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": "discard"}})
+part.setPickRetryCount(2)
+FakeNozzle.level = 231
 fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
-raised = None
 try:
     fire("Nozzle.AfterPick", nozzle=fake, part=part)
-except (Exception, Throwable) as e:
-    raised = e
-check("pick retry count 2: the hook makes the pick FAIL (OpenPnP then discards and picks again)",
-      raised is not None and "RECYCLE" in str(raised), str(raised)[:160])
-check("... and the re-feed will re-centre (synchronise)", S.getProperty("lumen.feedwatch.force.001980104648570520333535") == "1")
-FakeNozzle.level = 224
-raised = None
-try:
-    fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
-    fire("Nozzle.AfterPick", nozzle=fake, part=part)
-except (Exception, Throwable) as e:
-    raised = e
-check("good pick with action repick: no exception", raised is None, raised)
+    e = None
+except (Exception, Throwable) as x:
+    e = x
+check("event: ScriptException with the Lumen message reaches the caller (= OpenPnP's pick)",
+      e is not None and "ScriptException" in str(e.getClass() if hasattr(e, "getClass") else type(e)) + str(e) and "DISCARD" in str(e), str(e)[:100])
 part.setPickRetryCount(old_retry)
-S.clearProperty("lumen.feedwatch.force.001980104648570520333535")
+f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
+S.clearProperty(FORCE)
 
 S.out.println("identify packet (fake transport)")
 sent = []

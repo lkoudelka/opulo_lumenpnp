@@ -13,17 +13,24 @@ Default thresholds (counts) are ~30 % of the free-air / covered span measured on
 
 Settings ~/.openpnp2/lumen/settings.json key "pickvac":
     {"enabled": false, "threshold": {"N045": 3, "N08": 7, "*": 3}, "window": 10, "min_samples": 3,
-     "action": "recenter"}      # "log" | "recenter" | "repick"
+     "action": "recenter"}      # "log" | "recenter" | "return" | "discard"
 
 Actions on an edge pick:
 - log:      only the log line;
 - recenter: the next feed of that feeder runs the camera re-centring check;
-- repick:   "recycle, synchronise and pick again": re-centring is requested and the pick is made to fail
-            (RepickRequested raised from the Nozzle.AfterPick hook).  OpenPnP's job processor then
-            discards the part (discard location = recycle), feeds again (the Feeder.BeforeFeed hook runs
-            the re-centring = synchronise) and picks again - as often as the PART's "pick retry count"
-            allows.  With pick retry count 0 OpenPnP would stop the job instead, so then only "recenter"
-            is done and the log says why.
+- return:   "return to feeder, synchronise and pick again" (recycle, nothing wasted):
+            OpenPnP's Feeder.takeBackPart() puts the part back into its pocket (Photon: nozzle back
+            to the pick location, place, part-off check, feeder set to SkipNext so the tape does not
+            move), re-centring is requested and the pick is made to fail (RepickRequested).  OpenPnP's
+            job processor then "discards" an empty nozzle (does nothing), feeds again (the Feeder.
+            BeforeFeed hook re-centres = synchronise; the Photon feed is skipped) and picks the SAME
+            part again at the corrected location.  If the feeder cannot take the part back, falls
+            back to "discard";
+- discard:  "discard, synchronise and pick again": the part goes to the discard location (wasted),
+            OpenPnP feeds the next part, re-centres and picks again.
+"return" and "discard" need the PART's "pick retry count" >= 1 (OpenPnP's retry loop); with 0
+OpenPnP would stop the job, so then only "recenter" is done and the log says why.
+("repick" from an earlier version means "discard".)
 The pure decision is assess(); the OpenPnP side is after_pick() (Nozzle.AfterPick hook).
 """
 from __future__ import absolute_import, division, print_function
@@ -34,7 +41,7 @@ import time
 DEFAULTS = {"enabled": False, "threshold": {"N045": 3.0, "N08": 7.0, "*": 3.0}, "window": 10, "min_samples": 3,
             "action": "recenter"}
 FEED_MAX_AGE_S = 60.0
-ACTIONS = ("log", "recenter", "repick")
+ACTIONS = ("log", "recenter", "return", "discard")
 
 
 class RepickRequested(Exception):
@@ -137,18 +144,44 @@ def after_pick(machine, nozzle, part):
     if flagged:
         action = st.get("action", "recenter")
         if action == "repick":
+            action = "discard"
+        if action in ("return", "discard"):
             retries = part.getPickRetryCount() if part is not None else 0
             if retries < 1:
                 action = "recenter"
                 msg += " (pick again needs the part's pick retry count >= 1, it is 0: only re-centring)"
-        if action in ("recenter", "repick"):
+        if action == "return":
+            from java.lang import Throwable
+            feeder = find_feeder(machine, feed)
+            try:
+                if feeder is None or not feeder.canTakeBackPart():
+                    raise RuntimeError("feeder cannot take the part back now (feed option %s)" % (
+                        feeder.getFeedOptions() if feeder is not None else "-"))
+                take_back(feeder, nozzle)
+                msg += " -> RETURNED to the feeder pocket, synchronise (re-centre) and pick the same part again"
+            except (Exception, Throwable) as e:
+                action = "discard"
+                msg += " (return to the feeder failed: %s - discarding instead)" % e
+        if action in ("recenter", "return", "discard"):
             _set("lumen.feedwatch.force." + feed["feeder"], "1")
         if action == "recenter":
             msg += " -> re-centring check at the next feed"
+        if action == "discard":
+            msg += " -> DISCARD, synchronise (re-centre) and pick the next part"
         out["action"] = action
-        if action == "repick":
-            msg += " -> RECYCLE (discard), synchronise (re-centre) and pick again"
-            feedwatch._log("PICKVAC " + msg)
-            raise RepickRequested("Lumen pick vacuum check: %s" % msg)
         feedwatch._log("PICKVAC " + msg)
+        if action in ("return", "discard"):
+            raise RepickRequested("Lumen pick vacuum check: %s" % msg)
     return out
+
+
+def find_feeder(machine, feed):
+    for f in machine.getFeeders():
+        if str(f.getId()) == feed.get("feeder_id"):
+            return f
+    return None
+
+
+def take_back(feeder, nozzle):
+    """OpenPnP's own take-back: nozzle to the pick location, place, part-off check (Photon: SkipNext)."""
+    feeder.takeBackPart(nozzle)

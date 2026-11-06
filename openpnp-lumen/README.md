@@ -96,8 +96,13 @@ Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer ne
   - A level more than the threshold above it is logged (`PICKVAC` in the feedwatch log). Then, depending on the **action**:
     - **log only**;
     - **re-centre at the next feed** (default): the next feed of that feeder runs the camera re-centring check (also for feeders not ticked "While feeding"; with confirmation if set);
-    - **recycle, synchronise and pick again**: re-centring is requested and the hook makes the pick fail on purpose. OpenPnP's job processor then discards the part (discard location = recycle), feeds again (the feed hook re-centres = synchronise) and picks again, as often as the **part's pick retry count** allows.
-  - With retry count 0, OpenPnP would stop the job instead, so then only re-centring is done and the log says why.
+    - **return to feeder, synchronise and pick again (recycle, nothing wasted):**
+      1. OpenPnP's `Feeder.takeBackPart()` puts the part back into its pocket. For Photon: nozzle back to the pick location, place, part-off check, and the feeder is set to `SkipNext`.
+      2. Re-centring is requested and the hook makes the pick fail on purpose.
+      3. OpenPnP's job processor then "discards" an empty nozzle (does nothing), feeds again (the feed hook re-centres = synchronise; the Photon feed is skipped, the tape does not move) and picks **the same part** again at the corrected location.
+      4. If the feeder cannot take the part back, it falls back to discard (logged).
+    - **discard, synchronise and pick again (part wasted):** the part goes to the discard location, OpenPnP feeds the next part, re-centres and picks.
+  - "Return" and "discard" use OpenPnP's retry loop, so they need the **part's pick retry count ≥ 1**. With 0, OpenPnP would stop the job instead, so then only re-centring is done and the log says why.
   - *Pick retries for the job's parts...* sets the retry count to 2 for the open job's parts that have 0, after confirmation (`parts.xml` on save).
   - Thresholds are in vacuum counts per nozzle tip. Default about 30 % of the free-air / covered span measured on the bench: **N045 3** (233 / 223), **N08 7** (247 / 224), other tips 3.
   - The feed hook remembers which feeder supplied each nozzle; picks without a feed on that nozzle within 60 s (manual picks) are not judged.
@@ -171,6 +176,11 @@ What the switch changes is defined in `profile/lumen-profile.json`.
 - board-Z probe points in `preflight.json`;
 - the first learning correction, to confirm the correction direction: the residual must shrink, otherwise the dialog says "undo".
 
+## Planned (documented, not implemented)
+- **Laser Z measurement** without contact: board Z map, pick Z of every feeder, part presence on clear and black tape, placed part height. Proposal: a line laser + the existing top camera, ≈ €10–25, used as OpenPnP's Z probe through a `ScriptActuator`.
+  - [docs/laser-z-proposal.md](docs/laser-z-proposal.md): bill of materials, wiring to the AUX header, software, calibration, limits.
+  - [docs/z-measurement-options.md](docs/z-measurement-options.md): market check, needle tip vs switch probe vs laser.
+
 ## Not covered yet
 
 | Study item | Status |
@@ -213,7 +223,7 @@ tests/                  see below
 | `test_profiles.py` | `pnp-profile` on a **copy of the real `~/.openpnp2`**, judged by the real OpenPnP 2.6: byte-exact round trip; the lumen profile loads with the intended settings and nothing else changed; tuning in lumen + calibration edit → back to original equals the same edit in the original profile **byte for byte**; lumen tuning restored; hooks follow the profile; foreign hooks protected |
 | `test_tapevision.py` | Real top-camera images (white, clear, black tape): hole-geometry pocket within 0.08 mm of the detected pocket, 12 mm tape recognised, 8 mm pitch parity, presence "?" without paper |
 | `run_inspect_offline.sh` | Placement inspection with OpenPnP's OpenCV on semi-synthetic images (offset, rotation, missing, golden, polarity) + the menu script on the real job with the camera replaced (table, sort, golden, CSV) |
-| `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored; "pick again": the exception reaches OpenPnP as `ScriptException` with retry count 2, nothing raised with retry count 0); identify packet byte by byte |
+| `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored; return to feeder with Photon SkipNext, fallbacks to discard when the take-back is impossible or fails, discard, retry count 0 = re-centre only; the exception reaches OpenPnP as `ScriptException`); identify packet byte by byte |
 | `run_config_compat.sh` | Install into a **copy of the real `~/.openpnp2`**: no config file changed, OpenPnP loads it the same, the journal hook runs via OpenPnP's `Scripting.on()` and never raises, uninstall is clean |
 
 ### Real machine (manual, `tests/run_bench_real_ui.sh`)
