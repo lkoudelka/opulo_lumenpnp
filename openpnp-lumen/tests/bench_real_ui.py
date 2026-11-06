@@ -114,6 +114,60 @@ def rows_text(d):
                                            r["info"].update_status(), r.get("result", "")) for r in d.model.rows]
 
 
+def capture_all(tag):
+    from javax.imageio import ImageIO
+    for cam in list(machine.getDefaultHead().getCameras()) + list(machine.getCameras()):
+        try:
+            img = cam.settleAndCapture()
+            out = os.path.join(os.path.dirname(trace_path), "bench-%s-%s-%s.png" % (tag, cam.getName(), time.strftime("%H%M%S")))
+            ImageIO.write(img, "png", File(out))
+            check("%s camera image (%s): %dx%d" % (cam.getName(), tag, img.getWidth(), img.getHeight()),
+                  img.getWidth() > 640 or img.getHeight() > 480, out)
+        except Exception as e:
+            check("%s camera image (%s)" % (cam.getName(), tag), False, str(e))
+
+
+def run_verify(addr):
+    """Verified config: visual homing (camera + fiducial vision), camera images, ONE 4 mm feed of ADDR."""
+    from lumen import oppnp, photon
+    say("homing (visual homing of this configuration: moves the camera to the homing fiducial)")
+    t0 = time.time()
+    try:
+        oppnp.run_machine_task(machine, lambda: machine.home())
+        check("homed incl. visual homing in %.1f s" % (time.time() - t0), machine.isHomed())
+    except Exception as e:
+        check("homing", False, str(e))
+        return
+    cam = machine.getDefaultHead().getDefaultCamera()
+    say("  top camera now at %s" % cam.getLocation())
+    capture_all("homed")
+    bus = photon.Bus(oppnp.ActuatorTransport(machine))
+    fd = photon.Feeder(bus, addr)
+
+    def feed():
+        r = fd.app(photon.GET_FEEDER_ID)
+        if not r or r[0] != 0:
+            return "no answer from feeder %d" % addr
+        uuid = r[1:13]
+        if not fd.initialize(uuid):
+            return "INITIALIZE failed"
+        r = bus.transact(addr, 0x04, [40], retries=0)            # MOVE_FEED_FORWARD 4.0 mm, never repeated
+        if not r or r[0] != 0:
+            return "MOVE_FEED_FORWARD refused / no reply: %s" % r
+        ms = (r[1] << 8 | r[2]) if len(r) >= 3 else 1000
+        say("  feeder %d (%s): feeding 4 mm, expected %d ms" % (addr, photon.to_hex(uuid), ms))
+        time.sleep(ms / 1000.0 + 0.2)
+        for _ in range(20):
+            r = bus.transact(addr, 0x06, [], retries=0)           # MOVE_FEED_STATUS
+            if r:
+                return {0: "OK", 4: "still feeding", 5: "FAIL", 6: "COULDNT_REACH"}.get(r[0], "status 0x%02X" % r[0])
+            time.sleep(0.2)
+        return "no status reply"
+    t0 = time.time()
+    res = oppnp.run_machine_task(machine, feed)
+    check("feeder %d moved 4 mm forward: %s (%.1f s)" % (addr, res, time.time() - t0), res == "OK")
+
+
 def run_preflight(addr, uuid):
     """Test job with one part on Photon feeder ADDR (sandbox config only), Preflight, camera image."""
     global gui
@@ -183,14 +237,15 @@ def run_preflight(addr, uuid):
             check("%s camera image" % cam.getName(), False, str(e))
 
 
-say("connecting OpenPnP to the machine (motion commands blocked in this configuration copy)")
+say("connecting OpenPnP to the machine (%s)" % ("verify mode: motion ALLOWED (homing, camera moves, one 4 mm feed)"
+    if mode == "verify" else "HOME allowed, MOVE blocked" if mode == "preflight" else "HOME and MOVE blocked"))
 t0 = time.time()
 machine.setEnabled(True)
 check("machine enabled (driver connected)", machine.isEnabled(), "%.1f s" % (time.time() - t0))
 try:
     g, cls = load_script("Feeder_Firmware_Update.py")
     d = g[cls]()
-    if mode == "preflight":
+    if mode in ("preflight", "verify"):
         d.last_addr.setValue(1)
     check("Feeder Firmware Update dialog opened", d.frame.visible)
     if mode == "scan":
@@ -230,6 +285,8 @@ try:
     d.close()
     if mode == "preflight":
         run_preflight(int(args[0]), args[1])
+    if mode == "verify":
+        run_verify(int(args[0]))
 finally:
     machine.setEnabled(False)
     say("machine disabled (driver disconnected)")
