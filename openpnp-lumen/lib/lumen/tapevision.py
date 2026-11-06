@@ -223,3 +223,91 @@ def pick_pocket(result, near_y=None):
         return None
     cy = result["size"][1] / 2.0 if near_y is None else near_y
     return min(pk, key=lambda q: abs(q["y"] - cy))
+
+
+# ---------------------------------------------------------------------------------------
+# Tape geometry from the sprocket holes (works on paper, clear and black tape, any part):
+# EIA-481: holes 1.5 mm every 4 mm; pocket centre F from the hole line (8 mm tape 3.5,
+# 12 mm 5.5, 16 mm 7.5, 24 mm 11.5) and P2 = 2.0 mm along the tape from a hole.
+# ---------------------------------------------------------------------------------------
+F_STANDARD = (3.5, 5.5, 7.5, 11.5)
+
+
+def hole_line(circles, upp):
+    """circles [(x, y, r)] px -> the circles on one line (same x within 0.4 mm) whose spacings are
+    multiples of 4 mm; None if no such pair."""
+    best = None
+    for h in circles:
+        grp = [q for q in circles if abs(q[0] - h[0]) < 0.4 / upp]
+        ys = sorted(q[1] for q in grp)
+        good = 0
+        for i in range(len(ys)):
+            for j in range(i + 1, len(ys)):
+                n = (ys[j] - ys[i]) * upp / HOLE_PITCH_MM
+                if round(n) >= 1 and abs(n - round(n)) < 0.06:
+                    good += 1
+        if good and (best is None or good > best[0]):
+            best = (good, grp)
+    return best[1] if best else None
+
+
+def eia_pocket(holes, size, upp, pitch_mm):
+    """Pocket centre (px) nearest to the image centre, from the hole line and the part pitch.
+    Returns {x, y, F, F_measured, holes, hole_x} or {'error'}."""
+    if not holes or len(holes) < 2:
+        return {"error": "sprocket holes not found"}
+    w, h = size
+    cx, cy = w / 2.0, h / 2.0
+    xs = sorted(q[0] for q in holes)
+    hx = xs[len(xs) // 2]
+    y0 = holes[0][1]
+    ph = y0 + sum(((y - y0) * upp + 2.0) % HOLE_PITCH_MM - 2.0 for _, y, _ in holes) / len(holes) / upp
+    fe = abs(cx - hx) * upp
+    F = min(F_STANDARD, key=lambda f: abs(f - fe))
+    if abs(F - fe) > 1.0:
+        return {"error": "pick location %.2f mm from the hole line: no standard tape (3.5/5.5/7.5/11.5)" % fe}
+    side = 1.0 if cx > hx else -1.0
+    # pocket centres are 2.0 mm from SOME hole: candidates every min(pitch, 4) mm (for 8/12 mm pitch
+    # the hole parity is not known from the image -> the candidate nearest the current pick wins)
+    grid = min(float(pitch_mm or 4.0), HOLE_PITCH_MM)
+    k = round(((cy - ph) * upp - 2.0) / grid)
+    return {"x": hx + side * F / upp, "y": ph + (2.0 + k * grid) / upp, "F": F, "F_measured": fe,
+            "holes": len(holes), "hole_x": hx}
+
+
+def holes_cv2(gray, upp, cv2):
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray)
+    img = cv2.GaussianBlur(clahe, (9, 9), 2)
+    for p2 in (40, 30, 25):
+        c = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1.5, int(3.0 / upp), param1=50, param2=p2,
+                             minRadius=int(0.6 / upp), maxRadius=int(0.9 / upp))
+        found = hole_line([] if c is None else [tuple(float(v) for v in q) for q in c[0]], upp)
+        if found:
+            return found
+    return None
+
+
+def holes_java(image, upp):
+    """Sprocket holes in a BufferedImage with OpenPnP's OpenCV (same parameters as holes_cv2)."""
+    _ensure_opencv()
+    from org.opencv.core import Mat, Size
+    from org.opencv.imgproc import Imgproc
+    from org.openpnp.util import OpenCvUtils
+    import jarray
+    mat = OpenCvUtils.toMat(image)
+    g = Mat()
+    Imgproc.cvtColor(mat, g, Imgproc.COLOR_BGR2GRAY)
+    Imgproc.createCLAHE(3.0, Size(8, 8)).apply(g, g)
+    Imgproc.GaussianBlur(g, g, Size(9, 9), 2)
+    for p2 in (40, 30, 25):
+        c = Mat()
+        Imgproc.HoughCircles(g, c, Imgproc.HOUGH_GRADIENT, 1.5, int(3.0 / upp), 50, p2, int(0.6 / upp), int(0.9 / upp))
+        circles = []
+        if not c.empty():
+            a = jarray.zeros(c.cols() * 3, "f")
+            c.get(0, 0, a)
+            circles = [(a[i], a[i + 1], a[i + 2]) for i in range(0, len(a), 3)]
+        found = hole_line(circles, upp)
+        if found:
+            return found
+    return None
