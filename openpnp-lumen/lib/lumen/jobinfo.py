@@ -62,7 +62,7 @@ def readiness(job, machine, lumen_profile=None):
         if part is None:
             issues.append("placement has no part")
         elif not r["feeders"]:
-            issues.append("no feeder has this part")
+            issues.append("no feeder has this part (Feeder Assistant finds set-up feeders by name)")
         elif not r["enabled_feeders"]:
             issues.append("no usable feeder: " + "; ".join(
                 "%s: %s" % (f.getName(), unusable_reason(f)) for f in r["feeders"]))

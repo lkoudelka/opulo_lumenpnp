@@ -109,7 +109,8 @@ def render(panel, name):
 TOOLS = [("Feeder_Part_Check.py", "part_check"), ("Board_Z_Probe.py", "board_z"), ("Nozzle_Offset_Calibration.py", "nozzle_cal"),
          ("Placement_Inspection.py", "inspection"), ("Feeder_Firmware_Update.py", "firmware_update"),
          ("Job_Readiness.py", "job_readiness"), ("Last_Placements.py", "last_placements"), ("Orientation_Setup.py", "orientation"),
-         ("Pick_Offset_Learning.py", "pick_learning"), ("Preflight.py", "preflight")]
+         ("Pick_Offset_Learning.py", "pick_learning"), ("Preflight.py", "preflight"),
+         ("Feeder_Assistant.py", "feeder_assist")]
 for script, key in TOOLS:
     src = open(os.path.join(ROOT, "scripts", "Lumen", script)).read().rstrip().split("\n")
     g = {"__name__": "__main__", "scripting": Scr(), "machine": machine, "gui": G()}

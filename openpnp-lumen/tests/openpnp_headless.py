@@ -104,7 +104,7 @@ check("R0402 total 3, remaining 2, OK", rows["R0402"]["total"] == 3 and rows["R0
       and not rows["R0402"]["issues"], rows["R0402"]["issues"])
 check("C0402: height unknown + precise Photon reason", "part height unknown" in rows["C0402"]["issues"]
       and any("not found on the bus" in i and "no slot address" in i for i in rows["C0402"]["issues"]), rows["C0402"]["issues"])
-check("U-SOIC8: no feeder", rows["U-SOIC8"]["issues"] == ["no feeder has this part"])
+check("U-SOIC8: no feeder", rows["U-SOIC8"]["issues"][0].startswith("no feeder has this part"))
 check("D-SOD123: feeder switched off", rows["D-SOD123"]["issues"] == ["no usable feeder: Tube diode: switched off"],
       rows["D-SOD123"]["issues"])
 check("feeder_text", jobinfo.feeder_text(f1) == "Photon R0402 (Slot: 5)" and "switched off" in jobinfo.feeder_text(f3),
