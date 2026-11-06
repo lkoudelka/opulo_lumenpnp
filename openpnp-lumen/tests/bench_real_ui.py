@@ -114,6 +114,75 @@ def rows_text(d):
                                            r["info"].update_status(), r.get("result", "")) for r in d.model.rows]
 
 
+def run_preflight(addr, uuid):
+    """Test job with one part on Photon feeder ADDR (sandbox config only), Preflight, camera image."""
+    global gui
+    from org.openpnp.model import (Board, BoardLocation, Job, Length, LengthUnit, Location, Part, Placement,
+                                   Abstract2DLocatable)
+    from org.openpnp.machine.photon import PhotonFeeder
+    mm = LengthUnit.Millimeters
+    part = Part("BENCH-R0402")
+    part.setHeight(Length(0.4, mm))
+    Configuration.get().addPart(part)
+    f = PhotonFeeder()
+    f.setSlotAddress(addr)
+    f.setHardwareId(uuid)
+    f.setPart(part)
+    f.setEnabled(True)
+    machine.addFeeder(f)
+    board = Board()
+    board.setName("bench")
+    pl = Placement("R1")
+    pl.setPart(part)
+    pl.setLocation(Location(mm, 5, 5, 0, 0))
+    pl.setSide(Abstract2DLocatable.Side.Top)
+    board.addPlacement(pl)
+    bl = BoardLocation(board)
+    bl.setGlobalSide(Abstract2DLocatable.Side.Top)
+    job = Job()
+    job.addBoardOrPanelLocation(bl)
+
+    class Tab(object):
+        def getJob(self):
+            return job
+
+    class G(object):
+        def getJobTab(self):
+            return Tab()
+    g, cls = load_script("Preflight.py")
+    g["gui"] = G()
+    p = g[cls]()
+    say("Preflight: Run checks (homes the machine)")
+    t0 = time.time()
+    p.run()
+    end = time.time() + 300
+    time.sleep(1)
+    while not p.run_btn.isEnabled() and time.time() < end:
+        time.sleep(0.5)
+    for row in p.model.rows:
+        say("  %-16s %-5s %s" % tuple(row))
+    say("  " + str(p.head.getText()))
+    check("Preflight finished in %.1f s" % (time.time() - t0), p.run_btn.isEnabled())
+    check("machine homed", machine.isHomed())
+    res = dict((r[0], r[1]) for r in p.model.rows)
+    check("home / lights / vacuum sensors PASS, nozzle tips reported",
+          all(res.get(k) == "PASS" for k in ("home", "lights", "vacuum_sensors")) and res.get("nozzle_tips") in ("PASS", "WARN"), res)
+    check("feeder_bus scans feeder %d although it is not fully set up" % addr, res.get("feeder_bus") == "PASS",
+          [r[2] for r in p.model.rows if r[0] == "feeder_bus"])
+    check("job_readiness reports the feeder-50 problem (no slot location in this config) instead of passing",
+          res.get("job_readiness") == "FAIL", [r[2] for r in p.model.rows if r[0] == "job_readiness"])
+    from javax.imageio import ImageIO
+    for cam in list(machine.getDefaultHead().getCameras()) + list(machine.getCameras()):
+        try:
+            img = cam.settleAndCapture()
+            out = os.path.join(os.path.dirname(trace_path), "bench-%s-camera-%s.png" % (cam.getName(), time.strftime("%H%M%S")))
+            ImageIO.write(img, "png", File(out))
+            check("%s camera image at the home position (no move): %dx%d" % (cam.getName(), img.getWidth(), img.getHeight()),
+                  img.getWidth() > 640 or img.getHeight() > 480, out)
+        except Exception as e:
+            check("%s camera image" % cam.getName(), False, str(e))
+
+
 say("connecting OpenPnP to the machine (motion commands blocked in this configuration copy)")
 t0 = time.time()
 machine.setEnabled(True)
@@ -121,6 +190,8 @@ check("machine enabled (driver connected)", machine.isEnabled(), "%.1f s" % (tim
 try:
     g, cls = load_script("Feeder_Firmware_Update.py")
     d = g[cls]()
+    if mode == "preflight":
+        d.last_addr.setValue(1)
     check("Feeder Firmware Update dialog opened", d.frame.visible)
     if mode == "scan":
         last = int(args[0]) if args else 50
@@ -157,6 +228,8 @@ try:
                   r["result"].startswith("OK -> " + d.image.version))
             say("  update log: %s" % d.log.path)
     d.close()
+    if mode == "preflight":
+        run_preflight(int(args[0]), args[1])
 finally:
     machine.setEnabled(False)
     say("machine disabled (driver disconnected)")

@@ -124,7 +124,9 @@ def st_job_readiness(cfg, ctx):
 
 def st_feeder_bus(cfg, ctx):
     rows = ctx.get("readiness") or jobinfo.readiness(gui.getJobTab().getJob(), machine)
-    slots = sorted(set(int(f.getSlotAddress()) for r in rows if r["remaining"] > 0 for f in r["enabled_feeders"]
+    # every Photon feeder holding a job part, also one that is not fully set up yet (slot location /
+    # offset missing): job_readiness reports the setup, this step whether the feeder answers at all
+    slots = sorted(set(int(f.getSlotAddress()) for r in rows if r["remaining"] > 0 for f in r["feeders"]
                        if hasattr(f, "getSlotAddress") and f.getSlotAddress() is not None))
     if not slots:
         return None, "the job uses no Photon feeder"
