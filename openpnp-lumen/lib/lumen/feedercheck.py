@@ -37,29 +37,41 @@ def check_feeder(machine, feeder, save_dir=None):
     MovableUtils.moveToLocationAtSafeZ(cam, Location(mm, pick.getX(), pick.getY(), pick.getZ(), 0))
     img = cam.settleAndCapture()
     upp = cam.getUnitsPerPixel(Length(pick.getZ(), mm)).convertToUnits(mm)
-    r = tapevision.analyse_java(img, upp.getX())
-    if hasattr(feeder, "getPartPitch"):
-        res["configured_pitch"] = feeder.getPartPitch()
-    res["pitch_mm"] = r.get("pitch_mm")
-    if r.get("error"):
-        res["error"] = r["error"]
+    u = upp.getX()
+    w, h = img.getWidth(), img.getHeight()
+    pitch = feeder.getPartPitch() if hasattr(feeder, "getPartPitch") else None
+    res["configured_pitch"] = pitch
+    # 1. centring from the sprocket holes (any tape: paper, clear, black; any part size)
+    holes = tapevision.holes_java(img, u)
+    e = tapevision.eia_pocket(holes, (w, h), u, pitch or 4.0)
+    res["holes"] = holes or []
+    if e.get("error"):
+        res["error"] = e["error"]
     else:
-        w, h = r["size"]
-        p = tapevision.pick_pocket(r)
-        # image +Y down = machine -Y; image centre = camera = pick location
-        res["pocket_dx"] = (p["x"] - w / 2.0) * upp.getX()
-        res["pocket_dy"] = -(p["y"] - h / 2.0) * upp.getY()
-        res["part_at_pick"] = p["part"]
-        res["parts_visible"] = len([q for q in r["pockets"] if q["part"]])
-        res["pockets"] = len(r["pockets"])
-        res["scores"] = [q["score"] for q in r["pockets"]]
+        res["method"] = "sprocket holes, %d mm tape" % {3.5: 8, 5.5: 12, 7.5: 16, 11.5: 24}[e["F"]]
+        res["pocket_px"] = (e["x"], e["y"])
+        res["pocket_dx"] = (e["x"] - w / 2.0) * u
+        res["pocket_dy"] = -(e["y"] - h / 2.0) * upp.getY()
+    # 2. part present: paper tape analysis (bright band), only where its pocket matches the hole geometry
+    r = tapevision.analyse_java(img, u)
+    res["pitch_mm"] = r.get("pitch_mm")
+    res["part_at_pick"] = None
+    if not r.get("error") and not e.get("error"):
+        near = [q for q in r["pockets"] if ((q["x"] - e["x"]) ** 2 + (q["y"] - e["y"]) ** 2) ** 0.5 * u < 0.3]
+        if near:
+            res["part_at_pick"] = bool(near[0]["part"])
+            res["parts_visible"] = len([q for q in r["pockets"] if q["part"]])
+            res["pockets"] = len(r["pockets"])
+            res["scores"] = [q["score"] for q in r["pockets"]]
+    res["tape"] = "paper" if not r.get("error") else "clear/black (part presence not detected)"
     if save_dir:
         tag = str(feeder.getHardwareId()) if hasattr(feeder, "getHardwareId") and feeder.getHardwareId() else feeder.getName()
-        res["image"] = _save(img, r, save_dir, "slot%s-%s" % (res.get("slot", "x"), "".join(c for c in tag if c.isalnum())))
+        res["image"] = _save(img, r, save_dir, "slot%s-%s" % (res.get("slot", "x"), "".join(c for c in tag if c.isalnum())),
+                             holes, res.get("pocket_px"))
     return res
 
 
-def _save(img, r, save_dir, name):
+def _save(img, r, save_dir, name, holes=None, pocket=None):
     from java.awt import BasicStroke, Color, Font
     from java.awt.image import BufferedImage
     from java.io import File
@@ -78,11 +90,18 @@ def _save(img, r, save_dir, name):
     for q in r.get("pockets", []):
         G.setColor(g, Color(0, 200, 0) if q["part"] else Color.RED)
         G.drawRect(g, int(q["x"] - q["w"] / 2), int(q["y"] - q["h"] / 2), int(q["w"]), int(q["h"]))
-    p = tapevision.pick_pocket(r) if not r.get("error") else None
-    if p:
-        G.setColor(g, Color.MAGENTA)
-        G.drawLine(g, int(p["x"]) - 80, int(p["y"]), int(p["x"]) + 80, int(p["y"]))
-        G.drawLine(g, int(p["x"]), int(p["y"]) - 80, int(p["x"]), int(p["y"]) + 80)
+    G.setColor(g, Color.CYAN)
+    for x, y, d in holes or []:
+        G.drawOval(g, int(x - d), int(y - d), int(2 * d), int(2 * d))
+    w2, h2 = img.getWidth() // 2, img.getHeight() // 2
+    G.setColor(g, Color.RED)                              # current pick location = image centre
+    G.drawLine(g, w2 - 80, h2, w2 + 80, h2)
+    G.drawLine(g, w2, h2 - 80, w2, h2 + 80)
+    if pocket:
+        G.setColor(g, Color.GREEN)                        # pocket centre from the sprocket holes
+        x, y = int(pocket[0]), int(pocket[1])
+        G.drawLine(g, x - 70, y - 70, x + 70, y + 70)
+        G.drawLine(g, x - 70, y + 70, x + 70, y - 70)
     G.setColor(g, Color.MAGENTA)
     G.setFont(g, Font("SansSerif", Font.BOLD, 40))
     G.drawString(g, "%s  %s" % (name, r.get("error") or "pitch %.2f mm" % (r.get("pitch_mm") or 0)), 20, 50)
@@ -92,7 +111,7 @@ def _save(img, r, save_dir, name):
     return path
 
 
-def apply_pocket_offset(feeder, dx, dy, limit_mm=1.0):
+def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
     """Move the pick location by (dx, dy) mm (machine frame) onto the pocket centre.  Photon:
     the feeder offset changes (pick = slot location + offset rotated by the slot); the result is
     read back and reverted if it does not land where intended.  Returns (old, new) pick."""

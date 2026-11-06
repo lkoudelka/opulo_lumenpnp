@@ -78,6 +78,18 @@ Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer ne
 - **Storage:** `~/.openpnp2/lumen/orientation.json` holds the sources per board, the footprint table, confirmations and applied rotations. Copy it to another machine to take the confirmed footprints along.
 - **Preflight:** the `orientation` step warns about mismatches and unconfirmed parts; it is skipped if the helper was never used.
 
+### Feeder Part Check and centring while feeding (`Scripts > Lumen > Feeder Part Check`, `Events/Feeder.BeforeFeed.py`)
+- **Pocket centre from the sprocket holes**, using the EIA-481 tape geometry: holes 1.5 mm every 4 mm; pocket centre F from the hole line (3.5 / 5.5 / 7.5 / 11.5 mm for 8 / 12 / 16 / 24 mm tape, recognised automatically); 2.0 mm along the tape from a hole. Candidate pockets are spaced min(pitch, 4) mm, and the one nearest the current pick location is used.
+  - It works on paper, clear and black tape, and for any part size.
+  - Checked: it matches the directly detected pocket within 0.08 mm on 5 calibrated feeders.
+- **Part at pick** is detected on paper tape only (bright band); on clear or black tape it shows "?".
+- **Part already at pick** sets OpenPnP's feed option `SkipNext`, so the next feed is skipped (also in the menu Check).
+- **Columns sort** by clicking the header. *Apply offset* moves the pick location onto the pocket centre (read back, max 2 mm).
+- **While feeding:** tick the "While feeding" column, set "check every N feeds", "confirm before moving the pick location", "skip the feed if a part is at pick" and "max correction", then *Save options* (stored under `settings.json` → `feedwatch`).
+  - The `Feeder.BeforeFeed` hook (linked by `install.sh`, inert for unticked feeders) then checks every N-th feed.
+  - It moves only the camera. It sets `SkipNext` if a part is at pick, and centres the pick location for offsets between 0.05 mm and max (with a dialog Apply / Skip / Stop for this feeder if confirm is set). Larger offsets are only logged.
+  - Log: `~/.openpnp2/lumen/logs/feedwatch-<date>.log`. The hook never raises into the job.
+
 ## Configuration profiles: "original" and "lumen" (`profile/pnp_profile.py`)
 
 §1–§3 need configuration changes, so they live in a second profile you can switch to and back. Close OpenPnP first.
