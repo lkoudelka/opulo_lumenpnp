@@ -62,7 +62,13 @@ class FileLog(object):
 
     def __call__(self, text):
         line = "%s %s" % (time.strftime("%H:%M:%S"), text)
-        self.f.write(line + "\n")
+        out = line + "\n"
+        try:
+            if isinstance(out, unicode):                    # Jython 2: non-ASCII part names (1\u00b5F)
+                out = out.encode("utf-8")
+        except NameError:                                   # CPython 3
+            pass
+        self.f.write(out)
         self.f.flush()
         Logger.info("Lumen %s: %s" % (self.tag, text))
         return line

@@ -290,6 +290,58 @@ job table). Without the journal the placed placements are listed without order.<
 }
 
 # ---------------------------------------------------------------------------------------
+HELP["feeder_assist"] = {
+    "title": "Feeder Assistant - which set-up feeder holds each part of a new board / panel",
+    "html": """
+<p>Another project often names the same component differently (<i>C0402-0.1uF</i> vs <i>C_0402_1005Metric-100n</i>),
+so OpenPnP sees a new part without a feeder. The assistant reads every part name of the open job - <b>kind</b>
+(C, R, L, ferrite, LED, ...), <b>value</b> (100n = 100nF = 0.1uF, 4k7 = 4.7k, 0R1 = 0.1 ohm), <b>size</b> (0402, also from
+1005Metric), voltage / dielectric / tolerance, LED colour, part number - and compares it with the parts of the
+feeders you have already set up.</p>
+<ol>
+<li>Open the job with the new board / panel, then this tool. The list shows the parts without an enabled feeder
+(untick the filter to see all).</li>
+<li>Click a part: below, the <b>matching feeders are on top</b> (best first, green = strong, yellow = check the warning,
+grey = weak), then all other feeders. Passives are proposed only with the <b>same kind, value and size</b>; a lower
+voltage, other dielectric or worse tolerance is shown as a warning.</li>
+<li><i>Identify</i> blinks the feeder's LED to find the reel. <i>Choose this feeder for the part</i> (also a
+non-matching feeder, after a question). <i>Pre-select strong matches</i> fills only clear, warning-free proposals.</li>
+<li><i>Apply choices</i>: a confirmation lists every change. Nothing changes before.</li>
+</ol>
+<p><b>Apply as:</b> <i>the job uses the feeder's part</i> (recommended): the board's placements take the feeder's part, so
+its height, package, vision and nozzle tips stay as set up; the board / panel files are saved. <i>the feeder gets the job's
+part</i>: the feeder's part is replaced in the machine configuration (the job's part then needs height etc.).</p>
+<p>Your choices are remembered (~/.openpnp2/lumen/partmatch.json): the same part name in a later project is proposed
+first ("confirmed by you before"). For parts where orientation matters and the package names differ, check the
+rotation in Orientation Setup.</p>
+""" + MOVES % "none. Identify blinks the feeder's LED only.",
+    "tips": {
+        "only parts without an enabled feeder": "Hide parts that already have an enabled feeder holding exactly this part.",
+        "Choose this feeder for the part": "Use the selected feeder (below) for the selected part (above). Not applied yet.",
+        "Identify (blink LED)": "The selected feeder blinks its LED white 3 times (Photon IDENTIFY). No motion.",
+        "Pre-select strong matches": "Choose the best proposal for every part where it is strong (score >= 85), has no "
+                                     "warning (also not: an IC with another package name) and no equal second. A disabled feeder is "
+                                     "allowed (shown as a warning at Apply). "
+                                     "Check them, then Apply.",
+        "Clear choice": "Remove the choice of the selected part.",
+        "Apply as:": "Recommended: the job's placements use the feeder's part (feeder and part settings unchanged, board / "
+                     "panel files saved). Or: the feeder gets the job's part (machine configuration).",
+        "Apply choices...": "Show every change with its warnings and apply after your OK. Choices are remembered for later projects.",
+        "Close": "Close (choices not applied are lost).",
+        "Select a part above": "Which part the feeder list is for, how its name was read, how many feeders match.",
+    },
+    "columns": {
+        "Part": "Part id in the job (from the board import).", "Refs": "Placements of the part.", "Qty": "Number of placements.",
+        "Read as": "What the name was read as: kind, value, size, voltage, dielectric, tolerance / LED colour / part number.",
+        "Feeder now": "Feeders that already hold exactly this part.",
+        "Best proposal": "Best matching feeder and why.", "Score": "Match score 0-100: 100 same part, 99 confirmed before, "
+        ">= 85 strong, 40-84 check the warning, < 40 weak.",
+        "Your choice": "Feeder you chose (applied only with Apply choices).",
+        "Feeder": "Feeder name.", "Slot": "Photon slot address.", "Feeder part": "Part set up on the feeder.",
+        "Why": "What matched.", "Warnings": "What to check before choosing (voltage, dielectric, size, keywords only).",
+        "Enabled": "Whether the feeder is enabled.",
+    },
+}
 HELP["orientation"] = {
     "title": "Orientation Setup - pin 1 in the feeder vs. in the CAD footprint",
     "html": """

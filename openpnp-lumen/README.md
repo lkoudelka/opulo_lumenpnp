@@ -7,6 +7,7 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 | Script | Purpose | Study ref. | Touches the machine? |
 |---|---|---|---|
 | **Board Z Probe** | Board surface Z on the job's board fiducials by gentle vacuum contact. Shows Z per fiducial, the mean and the tilt (warning above 0.2 mm); *Apply* sets the board location Z. | §1 | **Moves**: nozzle down slowly onto the fiducials |
+| **Feeder Assistant** | New board / panel: which **already set-up feeder** holds each part, although the project names it differently. Reads kind, value (100n = 0.1uF, 4k7, 0R1), size (0402 / 1005Metric), voltage / dielectric / tolerance, LED colour, part number; per part the **matching feeders on top** (why, warnings), then all others. **You choose**, *Apply* after a confirmation: the job uses the feeder's part (board file saved), or the feeder gets the job's part. Choices are remembered for later projects. Details: [Feeder Assistant](#feeder-assistant-matching-rules). | §5 | LED blink on *Identify*; board file / feeder part on *Apply* |
 | **Feeder Firmware Update** | Update Photon feeder firmware over the bus, feeders mounted, OpenPnP connected. Pick the binary, scan the bus, tick feeders (all / some / outdated), update with progress, log and result per feeder. | §7 | Feeder bus only |
 | **Feeder Part Check** | Camera over the pick location of the ticked feeders. Pocket centre from the sprocket holes (any tape), part at pick (paper tape), *Apply offset*; a part at pick sets OpenPnP's `SkipNext`. Optional "While feeding" centring and pick vacuum check during the job, **options per feeder** (`Feeder.BeforeFeed`, `Nozzle.AfterPick`). Sortable. | §2/§3 | Camera only; pick location on *Apply* / while feeding |
 | **Job Readiness** | View limited to the open job: only its parts and feeders, quantity / remaining, part height, and precisely why a feeder is not usable. Optional: job feeders shown on their LEDs (green = ready, red = issue, off = not used). | §5 | LEDs only (on request) |
@@ -127,6 +128,34 @@ Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer ne
   - It moves only the camera. It sets `SkipNext` if a part is at pick, and centres the pick location for offsets between 0.05 mm and the feeder's max (with a dialog Apply / Skip / Stop for this feeder if Confirm is set; Stop = the feeder's own While feeding off). Larger offsets are only logged.
   - Log: `~/.openpnp2/lumen/logs/feedwatch-<date>.log`. The hook never raises into the job.
 
+### Feeder Assistant: matching rules
+- **Reading a part name** (`lib/lumen/partmatch.py`, part id + name + package id, plus the job's references):
+  - **Kind:** C, R, L, FB (ferrite; also `100R@100MHz`), LED, D, Y, other. Taken from the references (C12 → C; D1 with "LED" in the name → LED), else from the name (`C_`, `CAPC_0402`, `RES_`, `R0603`, `L_`, `COIL`, `FB_`, `LED`, `DIODE`, `Crystal`). A single letter counts only at the start of a name part, so `QFN6L_…` and `L7983` are not inductors.
+  - **Size:** 01005 … 2818, also from `1005Metric` → 0402. A name that contradicts its package (named 1210, package 1206) gives "size unknown" plus a warning.
+  - **Value:**
+    - capacitors: 100n = 100nF = 0.1uF = 0.1µF, 4n7, 1n0;
+    - resistors: 4k7 = 4.7k = 4K7, 7k5, 100R = 100 = 100Ω, 0R1 = 0.1R, 1M65, 10m = 10 mΩ;
+    - inductors: 2.2_uH = 2u2, 2.5n.
+  - **Ratings:** voltage (25V, 1kV; `10u25V` is split), tolerance, dielectric (C0G = NP0 = COG).
+  - **Ignored when reading the value:** current (0A5, 5A), frequency, dimensions.
+- **Proposals:**
+  - **Passives** need the same kind, value and size; a different value or size is never proposed.
+    - Score 85 base, +5 voltage ≥ needed, +4 same dielectric, +3 tolerance as good.
+    - Lower voltage −30, other dielectric −15, worse tolerance −15, each with a warning. A needed voltage the feeder part does not state gives −10 and a warning.
+    - A size missing from one name gives 50 and a warning. An unreadable value with the same kind and size gives 20, "check by hand".
+  - **LEDs:** same colour (or the same part number). Never a colour versus no colour.
+  - **Other parts:** the same part number gives 95, also with an order-code suffix (`STM32WBA65CI` ~ `STM32WBA65CIx`, ≥ 7 characters). Otherwise shared keywords give 40–90, "keywords only", plus a warning.
+    - Package names (QFN, SOT, DFN …) never count as a part number or as the only common keyword.
+  - **Never proposed:** fiducials.
+  - **Remembered choices:** a confirmed choice (`~/.openpnp2/lumen/partmatch.json`) gives 99, "confirmed by you before".
+- **Checked against the real configuration:** 98 feeder parts read correctly, including `CAPC_1206-10u25V`, `RES_0603-100R@100MHz, 0,5A` (ferrite), `RES_2818_Sense-10m` (10 mΩ). Of the 58 parts without a feeder, the proposals were sensible: `RES_0402-100` → `RES_0402-100R`, `CAPC_0805_4u7_16` → `CAPC_0805_4u7_25V`, and no fiducials.
+- **Apply:**
+  - The window shows every change with its warnings first.
+  - *The job uses the feeder's part* (recommended): the board's / panel's placements take the feeder's part, so the tuned height, package, vision and nozzle tips are kept. The board / panel file is saved, and the file names are in the confirmation.
+  - *The feeder gets the job's part*: changes the machine configuration (OpenPnP saves it).
+  - An IC whose package name differs from the feeder part's warns "check the orientation (Orientation Setup)".
+  - *Pre-select strong matches* fills only proposals with score ≥ 85 that have no warning, no equal second, and no package-name difference on an IC. A disabled feeder is allowed and shown as a warning.
+
 ### Board Z Probe details (vacuum contact, safety rules)
 - **Principle:** with the vacuum on, the open nozzle reads about 233 (N045); when the tip touches a flat surface the opening closes and the level drops (about 223 when covered). The first step with a drop of more than 5 counts (or 6 × noise) is the surface.
 - **Rules:**
@@ -239,6 +268,8 @@ tests/                  see below
 | `test_profiles.py` | `pnp-profile` on a **copy of the real `~/.openpnp2`**, judged by the real OpenPnP 2.6: byte-exact round trip; the lumen profile loads with the intended settings and nothing else changed; tuning in lumen + calibration edit → back to original equals the same edit in the original profile **byte for byte**; lumen tuning restored; hooks follow the profile; foreign hooks protected |
 | `test_tapevision.py` | Real top-camera images (white, clear, black tape): hole-geometry pocket within 0.08 mm of the detected pocket, 12 mm tape recognised, 8 mm pitch parity, presence "?" without paper |
 | `run_inspect_offline.sh` | Placement inspection with OpenPnP's OpenCV on semi-synthetic images (offset, rotation, missing, golden, polarity) + the menu script on the real job with the camera replaced (table, sort, golden, CSV) |
+| `test_partmatch.py` | Part name reading on real feeder names; other projects' names → feeders (0.1uF → 100n, 7.5k → 7k5, 0.1R → 0R1, ferrite, LED colours, part-number suffix, alias); never a different value / size; voltage / dielectric warnings; µ / Ω |
+| `run_feeder_assist_offline.sh` | Feeder Assistant on copies of the real configuration, test job and board file (no machine): renamed parts get the right feeder on top, all other feeders below, nothing changes before Apply / on Cancel, pre-select only strong warning-free proposals, Apply saves the board COPY (real file untouched), aliases remembered (99 next time), "feeder gets the job's part" mode, non-ASCII part names |
 | `test_feederopts.py` | Options per feeder: defaults, own values, older feeders list, validation, reset |
 | `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored; return to feeder with Photon SkipNext, fallbacks to discard when the take-back is impossible or fails, "feed the next part" off = exactly 1 + feed-retry-count refused feeds (also through `Scripting.on`), then clear, stale block ignored, discard, retry count 0 = re-centre only; the exception reaches OpenPnP as `ScriptException`); per-feeder options (own on/off, threshold, action, return-fails, Every N, While feeding vs the older list, Stop for this feeder); identify packet byte by byte |
 | `run_help_offline.sh` | Every tool opened on a copy of the real config with the test job, no machine: every button / checkbox / input / column has a description, the help panel opens and closes, windows rendered to PNG; Feeder Part Check options tab: edit with several rows highlighted, invalid value refused, reset, Save defaults |
