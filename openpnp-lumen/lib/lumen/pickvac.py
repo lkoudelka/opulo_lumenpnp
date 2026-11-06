@@ -25,7 +25,10 @@ Actions on an edge pick:
             job processor then "discards" an empty nozzle (does nothing), feeds again (the Feeder.
             BeforeFeed hook re-centres = synchronise; the Photon feed is skipped) and picks the SAME
             part again at the corrected location.  If the feeder cannot take the part back, falls
-            back to "discard";
+            back to "discard" - and then, unless "fallback_feed_next" is set, the NEXT feed of that
+            feeder is refused (Feeder.BeforeFeed raises FeedBlocked): OpenPnP retries the feed (its
+            feed retry count), disables the feeder and stops the job with the Lumen message, so the
+            operator checks the feeder (the part may lie loose on it) before it feeds again;
 - discard:  "discard, synchronise and pick again": the part goes to the discard location (wasted),
             OpenPnP feeds the next part, re-centres and picks again.
 "return" and "discard" need the PART's "pick retry count" >= 1 (OpenPnP's retry loop); with 0
@@ -39,9 +42,41 @@ import json
 import time
 
 DEFAULTS = {"enabled": False, "threshold": {"N045": 3.0, "N08": 7.0, "*": 3.0}, "window": 10, "min_samples": 3,
-            "action": "recenter"}
+            "action": "recenter", "fallback_feed_next": False}
 FEED_MAX_AGE_S = 60.0
 ACTIONS = ("log", "recenter", "return", "discard")
+
+
+class FeedBlocked(Exception):
+    """Raised from Feeder.BeforeFeed: the feed of the next part is refused (operator check needed)."""
+    lumen_block = True
+
+
+BLOCK = "lumen.pickvac.block."
+BLOCK_MAX_AGE_S = 60.0          # OpenPnP's feed retries follow immediately; an older block is stale
+
+
+def check_block(feeder):
+    """Called first in Feeder.BeforeFeed: raise FeedBlocked while a block is set for this feeder.
+    The block lasts for OpenPnP's feed retries of this one feed, then clears itself."""
+    hw = str(feeder.getHardwareId()).upper() if hasattr(feeder, "getHardwareId") and feeder.getHardwareId() else str(feeder.getId())
+    raw = _prop(BLOCK + hw)
+    if not raw:
+        return
+    info = json.loads(raw)
+    from java.lang import System
+    if time.time() - float(info.get("t", 0)) > BLOCK_MAX_AGE_S:     # stale (e.g. job resumed later): never block
+        System.clearProperty(BLOCK + hw)
+        return
+    left = int(info.get("left", 1)) - 1
+    if left > 0:
+        info["left"] = left
+        _set(BLOCK + hw, json.dumps(info))
+    else:
+        System.clearProperty(BLOCK + hw)
+    raise FeedBlocked("Lumen pick vacuum check: %s - next feed refused (option 'if the return fails: feed the next "
+                      "part' is off). Check the feeder (the part may lie loose on it), then re-enable the feeder."
+                      % info.get("why", "the part could not be returned to the feeder"))
 
 
 class RepickRequested(Exception):
@@ -162,6 +197,13 @@ def after_pick(machine, nozzle, part):
             except (Exception, Throwable) as e:
                 action = "discard"
                 msg += " (return to the feeder failed: %s - discarding instead)" % e
+                if not st.get("fallback_feed_next", False):
+                    # OpenPnP's feed loop makes exactly 1 + feed retry count attempts (ReferencePnpJobProcessor
+                    # $Pick.feed: i < 1 + getFeedRetryCount()); the block covers exactly those
+                    tries = 1 + (feeder.getFeedRetryCount() if feeder is not None else 3)
+                    _set(BLOCK + feed["feeder"], json.dumps({"left": tries, "t": time.time(), "why": "return of %s to %s failed (%s)" % (
+                        part.getId() if part is not None else "?", feed["name"], e)}))
+                    msg += "; feeding the next part is OFF -> the job stops for the operator"
         if action in ("recenter", "return", "discard"):
             _set("lumen.feedwatch.force." + feed["feeder"], "1")
         if action == "recenter":
