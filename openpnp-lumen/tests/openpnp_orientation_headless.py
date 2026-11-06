@@ -48,6 +48,7 @@ class FakeFrame(object):
 class FakeOptionPane(object):
     OK_OPTION = YES_OPTION = 0
     OK_CANCEL_OPTION = YES_NO_OPTION = 2
+    PLAIN_MESSAGE = -1
     answer, messages = 0, []
 
     @classmethod
@@ -154,8 +155,12 @@ def render(panel, name):
 g, cls = load("Orientation_Setup.py")
 ui = g[cls]()
 rows0 = list(ui.model.rows)
-check("without CAD: rows for job parts, CAD unknown", rows0 and all("CAD pin 1 unknown" in r["status"] or r["matters"] is False
-                                                                for r in rows0), [r["status"] for r in rows0][:2])
+check("without CAD: rows for job parts, CAD pin 1 NOT DETECTED: no CAD data loaded",
+      rows0 and all(("CAD pin 1 NOT DETECTED" in r["status"] and "no CAD data loaded" in r["status"]) or r["matters"] is False
+                    for r in rows0), [r["status"] for r in rows0][:2])
+rep0 = ui.report()
+check("detection report without CAD: every relevant part listed as NOT DETECTED, saved",
+      "NOT DETECTED" in rep0 and "pin 1 detected 0" in rep0, rep0.split("\n")[3:5])
 ui.add_source("kicad", kicad)
 rows = dict((r["part_id"], r) for r in ui.model.rows)
 check("KiCad import: STM32 pin 1 TL (auto)", rows["STM32F031C6"]["cad_dot"] == "TL" and not rows["STM32F031C6"]["cad_ok"])
@@ -293,8 +298,13 @@ check("pos only: footprint from the library -> auto, needs confirmation", rows["
       and rows["U32"]["cad_source"] == "lib:QFN-32-No-Paste.kicad_mod", rows["U32"].get("cad_source"))
 check("pos only: footprint from the OpenPnP package (pads named) -> TL", rows["D31"]["cad_dot"] == "TL"
       and rows["D31"]["cad_source"] == "openpnp-package")
-check("pos only: unknown footprint -> matters (U), CAD unknown", rows["U33"]["matters"] is True and rows["U33"]["cad_dot"] is None
-      and "unknown" in rows["U33"]["status"])
+check("pos only: unknown footprint -> matters (U), CAD pin 1 NOT DETECTED: footprint not in the loaded files",
+      rows["U33"]["matters"] is True and rows["U33"]["cad_dot"] is None and "NOT DETECTED" in rows["U33"]["status"]
+      and "not in the loaded board / Gerber / libraries" in rows["U33"]["status"], rows["U33"]["status"])
+rep3 = ui3.report()
+check("detection report: detected parts with their source, not detected with the reason",
+      "NOT DETECTED  " in rep3 and "lib:QFN-32-No-Paste.kicad_mod" in rep3 and "-> footprint" in rep3,
+      [l for l in rep3.split("\n") if "U33" in l or "QFN-32" in l][:2])
 check("pos only: U1 of this board does NOT take pin 1 of U1 of the other (mobo) board", rows["U1"]["cad_dot"] is None
       and rows["U1"]["footprint"] == "DFN4-1x1_STM", rows["U1"])
 check("pos only: capacitor not relevant", rows["C31"]["matters"] is False)
@@ -370,6 +380,19 @@ if os.path.exists(os.path.join(REAL, "Panel.kicad_pcb")):
     check("refused files are not bound to the board", "name:wba65-7up" not in st5["board_sources"], st5["board_sources"].keys())
     ui5.add_source("gerber", os.path.join(REAL, "Panel-F_Silkscreen.gbr"))
     check("silkscreen Gerber refused: no pin data", "not a copper layer" in ui5.last_import, ui5.last_import)
+    check("refused board file: the import message says pin 1 BY FOOTPRINT NAME was taken from it (confirm once)",
+          "BY FOOTPRINT NAME" in k5 and "14 footprint(s)" in k5, k5)
+    r5 = ui5.load_path(os.path.join(REAL, "Panel-top.pos"))
+    check("Load CAD data with the .pos: not loaded, 'that is the job itself'", r5["kind"] is None and "job itself" in r5["error"])
+    r5 = ui5.load_path(REAL)
+    check("Load CAD data with the project folder: the board file is found and imported", r5["kind"] == "kicad"
+          and "NOT USED" in ui5.last_import, r5)
+    rep5 = ui5.report()
+    nd5 = [l for l in rep5.split("\n") if l.startswith("NOT DETECTED")]
+    check("detection report: refused files with the reason, every relevant part detected by footprint name, none missing",
+          "REFUSED Panel.kicad_pcb" in rep5 and "REFUSED Panel-top_copper.gbr" in rep5 and "NOT detected 0" in rep5
+          and "table:kicad:Panel.kicad_pcb; auto, confirm in Check" in rep5, (nd5[:2], rep5.split("\n")[2:8]))
+    _Sys.out.println(rep5)
     _Sys.out.println(ui4.last_import)
 else:
     _Sys.out.println("(real data not found in %s: skipped)" % REAL)

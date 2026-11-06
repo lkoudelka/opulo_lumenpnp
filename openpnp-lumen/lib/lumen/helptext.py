@@ -295,14 +295,34 @@ HELP["orientation"] = {
     "html": """
 <p>For parts where orientation matters: pin 1 <b>in the feeder</b> (seen from above) and <b>in the CAD footprint</b>
 at 0 deg. From the two the rotation in the feeder follows (4 corners = 0/90/180/270).</p>
-<p>CAD pin 1 comes from a verified KiCad board or copper Gerber, or by footprint name (library, OpenPnP package,
-earlier confirmations). Every mark is confirmed in the two squares (<i>Check selected</i>).</p>
+<p><b>What to load (one is enough, all are optional):</b></p>
+<table cellpadding='2'>
+<tr><td valign='top'><b>KiCad board .kicad_pcb</b></td><td>Best. Pin 1 of every footprint, verified against the job
+(reference, footprint, rotation, position). Another revision is refused for the positions, but still gives pin 1
+<b>by footprint name</b> (confirm once per part).</td></tr>
+<tr><td valign='top'><b>Top copper Gerber X2</b></td><td>When the board file is not available. Only the <b>F.Cu</b> layer
+in <b>Gerber X2 with netlist attributes</b> (KiCad Plot: tick <i>Use extended X2 format</i> and
+<i>Include netlist attributes</i>). Silkscreen, mask, paste, drill, and old Gerbers (RS-274X / X1, no attributes) have no pin
+numbers and are refused with the reason. A folder or .zip with all Gerbers is fine: the top copper is picked.</td></tr>
+<tr><td valign='top'><b>Footprint library .pretty</b></td><td>Only for footprints that are not in the board file and not in
+the KiCad standard library (custom footprints), when the job came from a .pos file. A folder of .pretty folders is fine.</td></tr>
+<tr><td valign='top'><b>Nothing</b></td><td>Set pin 1 by hand in <i>Check selected</i> (two squares). Confirmed
+footprints are remembered for later jobs.</td></tr>
+</table>
+<p><b>Checks:</b> a file that does not match the job is refused as a whole with the reason (e.g. "only 0 of 249 placements
+found: other design or revision?"); single parts that cannot be verified say why in Status. Parts whose CAD pin 1 is
+unknown show <b>CAD pin 1 NOT DETECTED</b> with what to load. <i>Detection report</i> lists every part (detected from
+which source / not detected and why) and saves it to ~/.openpnp2/lumen/logs/.</p>
+<p>Every mark is confirmed in the two squares (<i>Check selected</i>). Nothing is changed on the feeder without
+<i>Confirm and apply</i>.</p>
 """ + MOVES % "<i>Show top camera at the feeder</i> moves the camera.",
     "tips": {
-        "Import KiCad board (.kicad_pcb)": "Pin 1 of every footprint from the board file - used only where it matches the job "
-                                           "(reference, footprint, rotation, position).",
-        "Import copper Gerber (X2)": "Pin 1 from the top copper Gerber with pin attributes (KiCad X2 + netlist attributes).",
-        "Footprint library (.pretty)": "Folder with KiCad footprints: pin 1 by footprint name for jobs from a .pos file.",
+        "Load CAD data (board / Gerber / library)": "Choose a KiCad board (.kicad_pcb), the top copper Gerber X2, a folder or "
+                                                    ".zip with the Gerbers / the KiCad project, or a footprint library folder. "
+                                                    "The tool says what it found; a wrong file (silkscreen, drill, .pos, old "
+                                                    "Gerber without X2) is refused with the reason. One input is enough.",
+        "Detection report": "List every part where orientation matters: pin 1 detected (from which file, confirmed or not) or "
+                            "NOT DETECTED with the reason and what to load. Saved to ~/.openpnp2/lumen/logs/.",
         "only parts where orientation matters": "Hide resistors, capacitors and other parts whose orientation does not matter.",
         "Check selected (two squares)": "Open the two squares for the selected row: click pin 1 in the feeder and in CAD.",
         "Toggle 'orientation matters'": "Override the automatic decision for the selected part.",
@@ -311,10 +331,11 @@ earlier confirmations). Every mark is confirmed in the two squares (<i>Check sel
     },
     "columns": {
         "Part": "Part id.", "Footprint": "Footprint name.", "Refs": "Placements of the part.",
-        "Orientation": "matters / not relevant.", "CAD pin 1": "Pin-1 corner in the footprint at 0 deg (auto / confirmed).",
+        "Orientation": "matters / not relevant.",
+        "CAD pin 1": "Pin-1 corner in the footprint at 0 deg: auto (from which file) or confirmed; '-' = not detected.",
         "Feeder": "Feeder holding the part.", "Feeder mark": "Pin-1 corner seen in the feeder.",
         "Needs": "Rotation the feeder needs (deg).", "Feeder now": "Current feeder rotation (deg).",
-        "Status": "CORRECT / MISMATCH / to check.",
+        "Status": "CORRECT / MISMATCH / to check / CAD pin 1 NOT DETECTED (with the reason and what to load).",
     },
 }
 HELP["orientation_check"] = {

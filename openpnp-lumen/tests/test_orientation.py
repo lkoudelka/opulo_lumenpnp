@@ -259,6 +259,96 @@ if os.path.exists(os.path.join(REAL, "Panel.kicad_pcb")):
     pos = o.parse_kicad_pos(os.path.join(REAL, "Panel-top.pos"))
     check("real 7-up .pos (other revision): .kicad_pcb and Gerber refused as a whole", o.match_kicad_pcb(fps, pos)["refused"]
           and o.match_gerber(g, pos)["refused"])
+
+    print("inputs: which file is usable, and the reason when not (Load CAD data / tools/orientation_check.py)")
+    import shutil
+    import subprocess
+    import tempfile
+    import zipfile
+    W = tempfile.mkdtemp(prefix="ori-in-")
+    cu = open(os.path.join(REAL, "Panel-top_copper.gbr")).read()
+
+    def write(name, text):
+        p = os.path.join(W, name)
+        if not os.path.isdir(os.path.dirname(p)):
+            os.makedirs(os.path.dirname(p))
+        f = open(p, "w")
+        f.write(text)
+        f.close()
+        return p
+    x1 = "\n".join(ln for ln in cu.split("\n") if not ln.startswith(("%TF", "%TO", "%TA", "%TD")))
+    why = o.gerber_check(o.parse_gerber(write("old/board-F_Cu.gbr", x1)))
+    check("old Gerber without X2 (RS-274X / X1): refused, says how to export X2", why and "without X2" in why and "netlist" in why, why)
+    nonet = "\n".join(ln for ln in cu.split("\n") if not ln.startswith(("%TO", "%TD")))
+    why = o.gerber_check(o.parse_gerber(write("nonet/b-F_Cu.gbr", nonet)))
+    check("X2 copper without netlist attributes: refused, says 'Include netlist attributes'",
+          why and "Include netlist attributes" in why, why)
+    bot = cu.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Copper,L2,Bot*%")
+    why = o.gerber_check(o.parse_gerber(write("bot/b-B_Cu.gbr", bot)))
+    check("bottom copper: refused (use F.Cu)", why and "not the TOP" in why, why)
+    gdir = os.path.join(W, "gerbers")
+    os.makedirs(gdir)
+    shutil.copy(os.path.join(REAL, "Panel-top_copper.gbr"), os.path.join(gdir, "Panel-F_Cu.gbr"))
+    shutil.copy(os.path.join(REAL, "Panel-F_Silkscreen.gbr"), os.path.join(gdir, "Panel-F_Silkscreen.gbr"))
+    write("gerbers/Panel-PTH.drl", "M48\nMETRIC\nT1C0.3\n%\nM30\n")
+    r = o.classify_input(gdir)
+    check("folder with all Gerbers: the top copper X2 is picked", r["kind"] == "gerber" and r["path"].endswith("Panel-F_Cu.gbr"), r)
+    zp = os.path.join(W, "fab.zip")
+    z = zipfile.ZipFile(zp, "w")
+    for fn in os.listdir(gdir):
+        z.write(os.path.join(gdir, fn), "fab/" + fn)
+    z.close()
+    r = o.classify_input(zp, os.path.join(W, "unz"))
+    check(".zip from the fab export: unpacked, top copper picked", r["kind"] == "gerber" and r["path"].endswith("Panel-F_Cu.gbr")
+          and os.path.isfile(r["path"]), r)
+    r = o.classify_input(os.path.join(W, "old"))
+    check("folder with only an old (non-X2) top copper: refused, says how to export", r["kind"] is None and "no X2" in r["error"], r)
+    shutil.copy(os.path.join(REAL, "Panel-top_copper.gbr"), os.path.join(gdir, "Other-F_Cu.gbr"))
+    r = o.classify_input(gdir)
+    check("two top copper Gerbers in a folder: refused, asks to choose", r["kind"] is None and "choose" in r["error"], r)
+    r = o.classify_input(os.path.join(gdir, "Panel-PTH.drl"))
+    check("drill file: refused", r["kind"] is None and "drill" in r["error"], r)
+    r = o.classify_input(os.path.join(REAL, "Panel-top.pos"))
+    check(".pos: refused ('that is the job itself')", r["kind"] is None and "job itself" in r["error"], r)
+    r = o.classify_input(os.path.join(REAL, "Panel-F_Silkscreen.gbr"))
+    check("silkscreen Gerber is read as a Gerber and then refused on load (not copper)", r["kind"] == "gerber")
+    # a footprint library as KiCad's 'Export footprints to new library' would make it (.pretty from the board)
+    lib = os.path.join(W, "board.pretty")
+    os.makedirs(lib)
+    for i in fps:
+        k = o.footprint_key(i["footprint"])
+        if i["side"] == "top" and k and not os.path.exists(os.path.join(lib, k + ".kicad_mod")):
+            write("board.pretty/%s.kicad_mod" % k, '(footprint "%s"\n%s)\n' % (k, "\n".join(
+                '  (pad "%s" smd rect (at %.4f %.4f) (size 0.5 0.5) (layers "F.Cu"))' % (n, x, -y) for n, x, y in i["pads"])))
+    r = o.classify_input(lib)
+    check(".pretty folder: library", r["kind"] == "library" and "footprints" in r["note"], r)
+    TOOL = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "orientation_check.py"),
+            os.path.join(REAL, "Panel-top.pos")]
+
+    def tool(*args):
+        pr = subprocess.run(TOOL + list(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        return pr.returncode, pr.stdout
+    rc, out = tool()
+    check("checker, nothing given: exit 2 'no usable input'", rc == 2 and "NO USABLE INPUT" in out, rc)
+    rc, out = tool("--cad", os.path.join(REAL, "Panel.kicad_pcb"))
+    check("checker, board file of another revision: refused for positions, all 42 relevant parts by footprint name (exit 3)",
+          rc == 3 and "REFUSED" in out and "OK, 42 placement(s) only by footprint name" in out, out.strip().split("\n")[-1])
+    rc, out = tool("--cad", os.path.join(REAL, "Panel-top_copper.gbr"))
+    check("checker, Gerber of another revision: NOT DETECTED with the reason per part (exit 1)",
+          rc == 1 and "NOT DETECTED: Gerber does not match" in out and "NOT COMPLETE" in out, rc)
+    rc, out = tool("--cad", os.path.join(REAL, "Panel-F_Silkscreen.gbr"))
+    check("checker, silkscreen: every part says 'not a copper layer'", rc == 1 and "NOT DETECTED: not a copper layer" in out, rc)
+    rc, out = tool("--cad", lib)
+    check("checker, only a footprint library (.pretty): pin 1 by name for all relevant parts (exit 3)",
+          rc == 3 and "OK, 42 placement(s)" in out and "name:lib:" in out, out.strip().split("\n")[-1])
+    one = [i for i in fps if i["side"] == "top" and i["ref"] and "*" not in i["ref"]]
+    write("one.pos", "# Ref Val Package PosX PosY Rot Side\n" + "\n".join("%s v %s %.4f %.4f %.4f top" % (
+        i["ref"], o.footprint_key(i["footprint"]), i["at"][0], i["at"][1], i["at"][2]) for i in one) + "\n")
+    pr = subprocess.run(TOOL[:2] + [os.path.join(W, "one.pos"), "--cad", os.path.join(REAL, "Panel.kicad_pcb")],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    check("checker, .pos and board of the same revision: verified from the board file (exit 0)",
+          pr.returncode == 0 and "108 of 108" in pr.stdout, pr.stdout.strip().split("\n")[-1])
+    shutil.rmtree(W)
 else:
     print("(real KiCad data not in %s: skipped)" % REAL)
 print("\n%d/%d checks passed" % (sum(results), len(results)))
