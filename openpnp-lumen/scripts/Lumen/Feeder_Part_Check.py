@@ -161,6 +161,9 @@ class PartCheck(object):
         act = {"repick": "discard"}.get(pv.get("action", "recenter"), pv.get("action", "recenter"))
         self.pv_action.setSelectedIndex(list(pickvac.ACTIONS).index(act) if act in pickvac.ACTIONS else 1)
         vrow.add(self.pv_action)
+        self.pv_feed_next = JCheckBox("if the return fails: discard and feed the next part (off: stop the job)",
+                                      bool(pv.get("fallback_feed_next", False)))
+        vrow.add(self.pv_feed_next)
         vrow.add(JButton("Save", actionPerformed=lambda e: self.save_pickvac()))
         vrow.add(JButton("Pick retries for the job's parts...", actionPerformed=lambda e: self.pick_retries()))
         north.add(vrow, BorderLayout.SOUTH)
@@ -219,7 +222,8 @@ class PartCheck(object):
             JOptionPane.showMessageDialog(self.frame, "Thresholds must be above 0.")
             return
         self.pv.update(enabled=bool(self.pv_on.isSelected()), threshold=thr,
-                       action=pickvac.ACTIONS[self.pv_action.getSelectedIndex()])
+                       action=pickvac.ACTIONS[self.pv_action.getSelectedIndex()],
+                       fallback_feed_next=bool(self.pv_feed_next.isSelected()))
         self.settings.set("pickvac", self.pv)
         self.log("pick vacuum check: %s" % self.pv)
         self.info.setText("pick vacuum check %s, thresholds %s, action %s" % ("ON" if self.pv["enabled"] else "off", thr,

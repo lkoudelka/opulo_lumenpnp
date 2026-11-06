@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
 ROOT = os.path.join(HERE, "..")
@@ -162,6 +163,58 @@ r, e = edge_pick("return", 2)
 check("take-back fails (Java exception): falls back to discard", e is not None and "return to the feeder failed" in str(e)
       and "DISCARD" in str(e), str(e)[:160])
 pickvac.take_back = fake_take_back
+BLOCKP = pickvac.BLOCK + "001980104648570520333535"
+S.clearProperty(BLOCKP)
+pickvac.take_back = failing_take_back
+r, e = edge_pick("return", 2)
+check("return fails, 'feed the next part' OFF (default): discard + next feed blocked for 1 + feed retry count attempts",
+      e is not None and "feeding the next part is OFF" in str(e) and json.loads(S.getProperty(BLOCKP))["left"] == 1 + f48.getFeedRetryCount(),
+      S.getProperty(BLOCKP))
+from lumen import feedwatch
+refused = 0
+for i in range(1 + f48.getFeedRetryCount()):
+    try:
+        feedwatch.before_feed(machine, f48, fake)
+    except (Exception, Throwable) as x:
+        refused += 1 if "next feed refused" in str(x) else 0
+check("OpenPnP's %d feed attempts are all refused (no tape movement), then the block is gone" % (1 + f48.getFeedRetryCount()),
+      refused == 1 + f48.getFeedRetryCount() and S.getProperty(BLOCKP) is None, refused)
+S.clearProperty(FORCE)
+try:
+    feedwatch.before_feed(machine, f48, fake)
+    after = None
+except (Exception, Throwable) as x:
+    after = x
+check("after the operator re-enables and continues: the feed is NOT refused", after is None, after)
+S.setProperty(BLOCKP, json.dumps({"left": 3, "t": 0, "why": "old"}))
+try:
+    feedwatch.before_feed(machine, f48, fake)
+    stale = None
+except (Exception, Throwable) as x:
+    stale = x
+check("a stale block (older than 60 s) never refuses a feed and is cleared", stale is None and S.getProperty(BLOCKP) is None)
+st_ = {"pickvac": {"enabled": True, "threshold": {"N045": 3, "*": 3}, "action": "return", "fallback_feed_next": True}}
+settings(st_)
+part.setPickRetryCount(2)
+FakeNozzle.level = 230
+f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
+pickvac.remember_feed(fake, f48)
+try:
+    pickvac.after_pick(machine, fake, part)
+except (Exception, Throwable) as x:
+    e = x
+check("return fails, 'feed the next part' ON: discard and pick the next part, no block",
+      "DISCARD" in str(e) and S.getProperty(BLOCKP) is None, str(e)[:120])
+pickvac.take_back = fake_take_back
+S.out.println("refused feed through OpenPnP's Scripting.on('Feeder.BeforeFeed')")
+S.setProperty(BLOCKP, json.dumps({"left": 1, "t": time.time(), "why": "test"}))
+try:
+    fire("Feeder.BeforeFeed", feeder=f48, nozzle=fake, part=part)
+    ev = None
+except (Exception, Throwable) as x:
+    ev = x
+check("the event raises (OpenPnP's feed attempt fails -> after the retries it disables the feeder and stops the job)",
+      ev is not None and "next feed refused" in str(ev), str(ev)[:120])
 r, e = edge_pick("discard", 2)
 check("discard: pick made to fail with DISCARD, nothing returned", e is not None and "DISCARD" in str(e) and not returned)
 r, e = edge_pick("return", 0)

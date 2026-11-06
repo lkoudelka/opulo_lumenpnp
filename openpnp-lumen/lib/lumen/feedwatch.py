@@ -92,9 +92,10 @@ def before_feed(machine, feeder, nozzle=None):
     hwid = str(feeder.getHardwareId()).upper() if hasattr(feeder, "getHardwareId") and feeder.getHardwareId() else None
     if hwid is None:
         return None
+    from lumen import pickvac
+    pickvac.check_block(feeder)                         # raises FeedBlocked if the next feed is refused
     if nozzle is not None:
         try:
-            from lumen import pickvac
             pickvac.remember_feed(nozzle, feeder)       # which feeder supplies this nozzle's pick (no motion)
         except Exception:
             pass
