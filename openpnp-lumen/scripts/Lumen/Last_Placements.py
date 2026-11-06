@@ -14,9 +14,13 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.jobinfo
 import lumen.journal
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.journal)
 from lumen import jobinfo, journal, oppnp
@@ -80,7 +84,7 @@ class LastPlacements(object):
         b.add(JButton("Mark LAST NOT placed", actionPerformed=lambda e: self.unplace(self.model.rows[:1])))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "last_placements"))
         f.pack()
         f.setLocationRelativeTo(gui)
         self.refresh()

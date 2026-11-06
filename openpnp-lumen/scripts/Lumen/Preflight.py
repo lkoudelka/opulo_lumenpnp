@@ -15,9 +15,13 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.photon
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.jobinfo
 reload(lumen.photon)
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.jobinfo)
 from lumen import jobinfo, oppnp, photon
 from lumen.oppnp import JavaException
@@ -273,7 +277,7 @@ class Preflight(object):
         b.add(JButton("Edit checklist", actionPerformed=lambda e: self.edit()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "preflight"))
         f.pack()
         f.setLocationRelativeTo(gui)
         f.setVisible(True)

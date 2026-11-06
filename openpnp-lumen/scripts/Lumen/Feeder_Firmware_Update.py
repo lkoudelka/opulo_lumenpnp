@@ -14,8 +14,12 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.photon
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 reload(lumen.photon)
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 from lumen import photon, oppnp
 from lumen.oppnp import JavaException
 
@@ -139,7 +143,7 @@ class UpdateDialog(object):
         bottom.add(brow, BorderLayout.SOUTH)
         root.add(bottom, BorderLayout.SOUTH)
 
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "firmware_update"))
         f.pack()
         f.setLocationRelativeTo(gui)
         f.setVisible(True)

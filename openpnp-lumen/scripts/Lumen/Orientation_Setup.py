@@ -21,9 +21,13 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.jobinfo
 import lumen.orientation
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.orientation)
 from lumen import jobinfo, oppnp
@@ -205,7 +209,7 @@ class CheckDialog(object):
         b.add(JButton("Cancel", actionPerformed=lambda e: f.dispose()))
         bottom.add(b, BorderLayout.SOUTH)
         root.add(bottom, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "orientation_check"))
         f.pack()
         f.setLocationRelativeTo(owner.frame)
         self.update()
@@ -368,7 +372,7 @@ class OrientationSetup(object):
         b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "orientation"))
         f.pack()
         f.setLocationRelativeTo(gui)
         self.refresh()

@@ -14,8 +14,12 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.learning
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.learning)
 from lumen import learning, oppnp
 from lumen.oppnp import JavaException
@@ -82,7 +86,7 @@ class Learning(object):
         b.add(JButton("Undo last correction of selected", actionPerformed=lambda e: self.undo()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "pick_learning"))
         f.pack()
         f.setLocationRelativeTo(gui)
         self.refresh()

@@ -20,10 +20,14 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.jobinfo
 import lumen.tapevision
 import lumen.inspect
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.tapevision)
 reload(lumen.inspect)
@@ -132,7 +136,7 @@ class Inspection(object):
         b.add(JButton("Export CSV", actionPerformed=lambda e: self.export()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "inspection"))
         self.filter()
         f.pack()
         f.setLocationRelativeTo(gui)

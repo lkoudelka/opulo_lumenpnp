@@ -14,9 +14,13 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.photon
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.jobinfo
 reload(lumen.photon)
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.jobinfo)
 from lumen import jobinfo, oppnp, photon
 from lumen.oppnp import JavaException
@@ -92,7 +96,7 @@ class Readiness(object):
         b.add(JButton("Feeder LEDs off", actionPerformed=lambda e: self.leds(False)))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "job_readiness"))
         f.pack()
         f.setLocationRelativeTo(gui)
         self.refresh()

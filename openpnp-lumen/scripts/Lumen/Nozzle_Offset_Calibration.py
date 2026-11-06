@@ -16,10 +16,14 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.zprobe
 import lumen.tapevision
 import lumen.nozzlecal
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.zprobe)
 reload(lumen.tapevision)
 reload(lumen.nozzlecal)
@@ -66,7 +70,7 @@ class NozzleCal(object):
         b.add(self.run_btn)
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "nozzle_cal"))
         f.pack()
         f.setLocationRelativeTo(gui)
         f.setVisible(True)
