@@ -1,5 +1,6 @@
 # Lumen: pick location centring while feeding (linked by openpnp-lumen install.sh).
-# Does nothing unless feeders are enabled in Scripts > Lumen > Feeder Part Check ("While feeding").
+# Does nothing unless feeders are enabled in Scripts > Lumen > Feeder Part Check ("While feeding"),
+# except remembering which feeder supplies the nozzle (for the pick vacuum check).
 # Never raises into the job.  Variables from OpenPnP: feeder, nozzle, part, machine.
 try:
     import os as _os
@@ -9,7 +10,7 @@ try:
     if _lib not in _sys.path:
         _sys.path.insert(0, _lib)
     from lumen import feedwatch as _fw
-    _fw.before_feed(_C.get().getMachine(), feeder)
+    _fw.before_feed(_C.get().getMachine(), feeder, nozzle)
 except:                                   # bare: also Java exceptions/errors (Jython)
     try:
         from org.pmw.tinylog import Logger as _L

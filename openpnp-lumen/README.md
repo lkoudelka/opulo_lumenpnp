@@ -38,7 +38,7 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 ## Install / uninstall
 
 ```
-./install.sh              # menu scripts + the inert Feeder.BeforeFeed hook (links to this checkout)
+./install.sh              # menu scripts + the inert hooks Feeder.BeforeFeed, Nozzle.AfterPick (links to this checkout)
 ./install.sh --journal    # + placement journal hook (Events/Job.Placement.Complete.py)
 ./uninstall.sh            # removes exactly these links (settings/logs in ~/.openpnp2/lumen stay)
 ```
@@ -89,6 +89,14 @@ Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer ne
 - **Part at pick** is detected on paper tape only (bright band); on clear or black tape it shows "?".
 - **Part already at pick** sets OpenPnP's feed option `SkipNext`, so the next feed is skipped (also in the menu Check).
 - **Columns sort** by clicking the header. *Apply offset* moves the pick location onto the pocket centre (read back, max 2 mm).
+- **Go to pick location / Identify (blink LED):** for the clicked row, the top camera moves over the feeder's pick location, or the feeder blinks its LED white 3 times (Photon `IDENTIFY_FEEDER` 0xC1 + UUID, every firmware, no motion).
+- **Pick vacuum check** (`Events/Nozzle.AfterPick.py`, off by default):
+  - Right after each pick the vacuum level is read with the part held. An edge pick seals worse, so the level is closer to free air.
+  - Each feeder is compared with **its own typical good pick** (median of the last 10 good picks, after 3 learning picks).
+  - A level more than the threshold above it is logged (`PICKVAC` in the feedwatch log), and the next feed of that feeder runs the camera re-centring check (also for feeders not ticked "While feeding"; with confirmation if set).
+  - Thresholds are in vacuum counts per nozzle tip. Default about 30 % of the free-air / covered span measured on the bench: **N045 3** (233 / 223), **N08 7** (247 / 224), other tips 3.
+  - The feed hook remembers which feeder supplied each nozzle; picks without a feed on that nozzle within 60 s (manual picks) are not judged.
+  - Offline-tested through OpenPnP's `Scripting.on()`; **not yet on the machine**.
 - **While feeding:** tick the "While feeding" column, set "check every N feeds", "confirm before moving the pick location", "skip the feed if a part is at pick" and "max correction", then *Save options* (stored under `settings.json` → `feedwatch`).
   - The `Feeder.BeforeFeed` hook (linked by `install.sh`, inert for unticked feeders) then checks every N-th feed.
   - It moves only the camera. It sets `SkipNext` if a part is at pick, and centres the pick location for offsets between 0.05 mm and max (with a dialog Apply / Skip / Stop for this feeder if confirm is set). Larger offsets are only logged.
@@ -176,6 +184,7 @@ lib/lumen/journal.py    placement journal
 lib/lumen/orientation.py  pin-1 marks, verified .kicad_pcb / Gerber import, footprint table
 lib/lumen/tapevision.py tape analysis: sprocket holes, EIA pocket centre, pockets / parts (paper)
 lib/lumen/feedercheck.py, feedwatch.py   Feeder Part Check and the Feeder.BeforeFeed centring
+lib/lumen/pickvac.py    pick vacuum check (edge pick -> re-centre), Nozzle.AfterPick
 lib/lumen/zprobe.py     vacuum contact probing (Board Z Probe)
 lib/lumen/nozzlecal.py  target carry + OpenPnP nozzle offset calibration
 lib/lumen/inspect.py    placement inspection (size + golden sample)
@@ -199,6 +208,7 @@ tests/                  see below
 | `test_profiles.py` | `pnp-profile` on a **copy of the real `~/.openpnp2`**, judged by the real OpenPnP 2.6: byte-exact round trip; the lumen profile loads with the intended settings and nothing else changed; tuning in lumen + calibration edit → back to original equals the same edit in the original profile **byte for byte**; lumen tuning restored; hooks follow the profile; foreign hooks protected |
 | `test_tapevision.py` | Real top-camera images (white, clear, black tape): hole-geometry pocket within 0.08 mm of the detected pocket, 12 mm tape recognised, 8 mm pitch parity, presence "?" without paper |
 | `run_inspect_offline.sh` | Placement inspection with OpenPnP's OpenCV on semi-synthetic images (offset, rotation, missing, golden, polarity) + the menu script on the real job with the camera replaced (table, sort, golden, CSV) |
+| `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored); identify packet byte by byte |
 | `run_config_compat.sh` | Install into a **copy of the real `~/.openpnp2`**: no config file changed, OpenPnP loads it the same, the journal hook runs via OpenPnP's `Scripting.on()` and never raises, uninstall is clean |
 
 ### Real machine (manual, `tests/run_bench_real_ui.sh`)
@@ -220,4 +230,4 @@ Runs on a **copy** of `~/.openpnp2` (the real configuration is never written), w
 - Board Z Probe;
 - target carry and the OpenPnP nozzle calibration (GUI).
 
-**Not yet on the machine:** Placement Inspection on real parts; "While feeding" inside a real job and its confirmation dialog.
+**Not yet on the machine:** Placement Inspection on real parts; "While feeding" inside a real job and its confirmation dialog; pick vacuum check; Go to / Identify buttons.

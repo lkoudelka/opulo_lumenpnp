@@ -134,3 +134,37 @@ def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
         feeder.setOffset(old)
         raise RuntimeError("offset did not move the pick location as intended (reverted)")
     return before, after
+
+
+def go_to(machine, feeder):
+    """Top camera over the feeder's pick location (safe Z).  Call inside a machine task."""
+    from org.openpnp.model import LengthUnit, Location
+    from org.openpnp.util import MovableUtils
+    mm = LengthUnit.Millimeters
+    if hasattr(feeder, "findSlotAddress") and feeder.getSlotAddress() is None:
+        feeder.findSlotAddress()
+    pick = feeder.getPickLocation().convertToUnits(mm)
+    cam = machine.getDefaultHead().getDefaultCamera()
+    MovableUtils.moveToLocationAtSafeZ(cam, Location(mm, pick.getX(), pick.getY(), pick.getZ(), 0.0))
+    return pick
+
+
+IDENTIFY_FEEDER = 0xC1
+
+
+def identify(machine, feeder, transport=None):
+    """Photon IDENTIFY_FEEDER (0xC1 + UUID): the feeder blinks its LED white 3 times.  No motion.
+    Works with every Photon firmware.  Returns the slot address."""
+    from lumen import oppnp, photon
+    hw = str(feeder.getHardwareId())
+    uuid = [int(hw[i:i + 2], 16) for i in range(0, 24, 2)]
+    if hasattr(feeder, "findSlotAddress") and feeder.getSlotAddress() is None:
+        feeder.findSlotAddress()
+    addr = feeder.getSlotAddress()
+    if addr is None:
+        raise RuntimeError("slot address of %s not known (feeder not on the bus?)" % feeder.getName())
+    bus = photon.Bus(transport or oppnp.ActuatorTransport(machine))
+    r = bus.transact(int(addr), IDENTIFY_FEEDER, uuid, retries=1)
+    if not r or r[0] != 0:
+        raise RuntimeError("feeder at address %s did not confirm IDENTIFY (%s)" % (addr, r))
+    return int(addr)
