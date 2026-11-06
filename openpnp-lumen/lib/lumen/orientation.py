@@ -306,19 +306,146 @@ def parse_gerber(path):
             region.append((x, y))
         elif "D03" in b and cur:
             pads.append((cur[0], cur[1], x, y))
-    return {"software": head["GenerationSoftware"], "function": head["FileFunction"], "pads": pads}
+    return {"software": head["GenerationSoftware"], "function": head["FileFunction"], "pads": pads,
+            "x2": "%TF." in text or "%TO." in text}
+
+
+GERBER_HOWTO = ("KiCad: File > Plot, format Gerber, layer F.Cu, tick 'Use extended X2 format' and "
+                "'Include netlist attributes'")
 
 
 def gerber_check(g):
-    """None if the file can be used, else why not."""
+    """None if the file can be used, else why not (with what to do)."""
+    if not g.get("x2", True) and not g["function"]:
+        return ("Gerber without X2 attributes (old RS-274X / X1 format): it has no pin numbers. Export the top copper "
+                "again as Gerber X2 - " + GERBER_HOWTO)
     if not g["function"].startswith("Copper"):
-        return "not a copper layer (%s): use the top COPPER Gerber (F_Cu)" % (g["function"] or "no X2 file function")
+        return "not a copper layer (%s): use the top COPPER Gerber (F.Cu)" % (g["function"] or "no X2 file function")
     if ",Top" not in g["function"] and ",L1," not in g["function"]:
-        return "not the TOP copper layer (%s)" % g["function"]
+        return "not the TOP copper layer (%s): use F.Cu" % g["function"]
     if not [p for p in g["pads"] if p[1]]:
-        return ("no pin attributes: export again with 'Use extended X2 format' and "
-                "'Include netlist attributes' (KiCad Plot dialog)")
+        return "X2 Gerber but no pin attributes: export again with 'Include netlist attributes' - " + GERBER_HOWTO
     return None
+
+
+# ---------------------------------------------------------------------------------------
+# Which input is this?  One "Load CAD data" for a file, a folder or a zip
+# ---------------------------------------------------------------------------------------
+GERBER_EXT = (".gbr", ".gtl", ".gbx", ".ger", ".pho", ".art", ".cmp", ".top")
+OTHER_GERBER_EXT = (".gbl", ".gto", ".gts", ".gtp", ".gbo", ".gbs", ".gbp", ".gm1", ".gko", ".g2", ".g3")
+DRILL_EXT = (".drl", ".xln", ".exc", ".txt")
+ACCEPTED = ("a KiCad board (.kicad_pcb), the top copper Gerber X2 (.gbr / .gtl, or the folder / .zip with the Gerbers), "
+            "or a KiCad footprint library (a .pretty folder or a folder of them)")
+
+
+def gerber_head(path, size=65536):
+    """X2 file function of a Gerber from its first bytes ('' if none / unreadable)."""
+    try:
+        f = open(path)
+        try:
+            t = f.read(size)
+        finally:
+            f.close()
+    except (IOError, OSError):
+        return None
+    if not (t.lstrip().startswith(("%", "G04", "G75", "G01", "M02")) or "%FSLA" in t):
+        return None                                           # not a Gerber at all
+    m = re.search(r"%TF\.FileFunction,([^*%]*)\*%", t)
+    return m.group(1) if m else ""
+
+
+def _scan_dir(path):
+    """(kicad_pcb files, top copper X2 Gerbers, Gerbers without X2 that look like top copper, kicad_mod count)"""
+    pcbs, tops, oldtops, mods = [], [], [], 0
+    for root, _, files in os.walk(path):
+        for fn in sorted(files):
+            full = os.path.join(root, fn)
+            low = fn.lower()
+            if low.endswith(".kicad_pcb"):
+                pcbs.append(full)
+            elif low.endswith(".kicad_mod"):
+                mods += 1
+            elif low.endswith(GERBER_EXT + OTHER_GERBER_EXT):
+                ff = gerber_head(full)
+                if ff and ff.startswith("Copper") and (",Top" in ff or ",L1," in ff):
+                    tops.append(full)
+                elif ff == "" and (low.endswith(".gtl") or "f_cu" in low or "f.cu" in low or "top_copper" in low or "-top." in low):
+                    oldtops.append(full)
+    return pcbs, tops, oldtops, mods
+
+
+def _unzip(path, dest):
+    import zipfile
+    z = zipfile.ZipFile(path)
+    try:
+        out = os.path.join(dest, os.path.splitext(os.path.basename(path))[0])
+        for n in z.namelist():
+            low = n.lower()
+            if n.endswith("/") or ".." in n.replace("\\", "/").split("/"):
+                continue
+            if low.endswith((".kicad_pcb", ".kicad_mod") + GERBER_EXT + OTHER_GERBER_EXT):
+                t = os.path.join(out, *n.replace("\\", "/").split("/"))
+                if not os.path.isdir(os.path.dirname(t)):
+                    os.makedirs(os.path.dirname(t))
+                f = open(t, "wb")
+                try:
+                    f.write(z.read(n))
+                finally:
+                    f.close()
+        return out
+    finally:
+        z.close()
+
+
+def classify_input(path, unzip_dir=None):
+    """What a chosen file / folder / zip is for pin-1 detection:
+    {"kind": "kicad" | "gerber" | "library", "path": ..., "note": ...} or {"kind": None, "error": why + what to use}."""
+    low = path.lower()
+    name = os.path.basename(path)
+    if os.path.isdir(path):
+        pcbs, tops, oldtops, mods = _scan_dir(path)
+        if pcbs:
+            return {"kind": "kicad", "path": pcbs[0], "note": "board file %s found in the folder" % os.path.basename(pcbs[0])
+                    + (" (%d more ignored)" % (len(pcbs) - 1) if len(pcbs) > 1 else "")}
+        if len(tops) == 1:
+            return {"kind": "gerber", "path": tops[0], "note": "top copper Gerber X2 %s found in the folder" % os.path.basename(tops[0])}
+        if len(tops) > 1:
+            return {"kind": None, "error": "%d top copper Gerbers in %s (%s): choose the one of this board" % (
+                len(tops), name, ", ".join(os.path.basename(t) for t in tops[:4]))}
+        if mods:
+            return {"kind": "library", "path": path, "note": "%d KiCad footprints (.kicad_mod)" % mods}
+        if oldtops:
+            return {"kind": None, "error": "%s: the top copper Gerber %s has no X2 attributes (no pin numbers). Export it again "
+                    "as Gerber X2 - %s" % (name, os.path.basename(oldtops[0]), GERBER_HOWTO)}
+        return {"kind": None, "error": "%s: nothing usable found. Use %s" % (name, ACCEPTED)}
+    if not os.path.isfile(path):
+        return {"kind": None, "error": "%s does not exist" % path}
+    if low.endswith(".zip"):
+        if not unzip_dir:
+            return {"kind": None, "error": "zip files need an unpack folder"}
+        try:
+            d = _unzip(path, unzip_dir)
+        except Exception as e:
+            return {"kind": None, "error": "cannot unpack %s: %s" % (name, e)}
+        r = classify_input(d)
+        if r.get("kind"):
+            r["note"] = "from %s: %s" % (name, r.get("note", ""))
+        return r
+    if low.endswith(".kicad_pcb"):
+        return {"kind": "kicad", "path": path, "note": "KiCad board"}
+    if low.endswith(".kicad_mod"):
+        return {"kind": "library", "path": os.path.dirname(path), "note": "the folder of %s" % name}
+    if low.endswith((".pos", ".csv", ".xy", ".mnt")):
+        return {"kind": None, "error": "%s is a position / BOM file: that is the job itself (OpenPnP File > Import Board). "
+                "For pin 1 use %s" % (name, ACCEPTED)}
+    if low.endswith(".kicad_pro") or low.endswith(".kicad_sch"):
+        return {"kind": None, "error": "%s: choose the board file (.kicad_pcb) of the project, or its folder" % name}
+    if low.endswith(DRILL_EXT) and gerber_head(path) is None:
+        return {"kind": None, "error": "%s is a drill file: no pads. Use %s" % (name, ACCEPTED)}
+    ff = gerber_head(path)
+    if ff is None:
+        return {"kind": None, "error": "%s is not a file this tool reads. Use %s" % (name, ACCEPTED)}
+    return {"kind": "gerber", "path": path, "note": "Gerber (%s)" % (ff or "no X2 attributes")}
 
 
 LINK_STEPS = (0.3, 0.5, 0.8, 1.2, 1.8, 2.5, 3.5, 5.0)   # mm, pad-to-pad link distances tried in order

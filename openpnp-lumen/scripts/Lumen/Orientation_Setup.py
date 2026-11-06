@@ -4,10 +4,13 @@
 # mark on the part in the FEEDER (left square, seen from above in machine coordinates, as in
 # the top camera view) and in the CAD footprint at 0 deg (right square)?  From the two marks
 # the rotation in the feeder is calculated and can be applied to the feeder.
-# The CAD mark can be detected automatically from the KiCad .kicad_pcb or from KiCad copper
-# Gerbers with X2 attributes.  With only a position file (.pos) it is found by footprint name:
-# footprint libraries (.pretty), the OpenPnP package footprint, or the footprint table that
-# every import and confirmation fills (pin 1 of a footprint is the same on every board).
+# The CAD mark can be detected automatically from ONE of: the KiCad .kicad_pcb, the top copper
+# Gerber X2 (with netlist attributes), or a footprint library (.pretty) - "Load CAD data" takes a
+# file, a folder or a zip and says what it found.  With only a position file (.pos) pin 1 is found by
+# footprint name: footprint libraries, the OpenPnP package footprint, or the footprint table that
+# every import and confirmation fills (pin 1 of a footprint is the same on every board, so a board
+# file of another revision still teaches it).  "Detection report" lists per part where pin 1
+# comes from, or why it could not be detected and what to load.
 # Every mark is confirmed by you in the two squares, and the list
 # shows what is confirmed and whether the feeder rotation is correct.  Nothing is changed
 # without "Apply".
@@ -16,6 +19,7 @@ from __future__ import absolute_import, division, print_function
 import math
 import os
 import sys
+import time
 
 _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "lib")
 if _LIB not in sys.path:
@@ -39,7 +43,7 @@ from java.awt import (BasicStroke, BorderLayout, Color, Dimension, FlowLayout, F
 from java.awt.event import MouseAdapter
 from java.lang import String
 from javax.swing import (BorderFactory, JButton, JCheckBox, JFileChooser, JFrame, JLabel, JOptionPane, JPanel,
-                         JScrollPane, JTable, ListSelectionModel, WindowConstants)
+                         JScrollPane, JTable, JTextArea, ListSelectionModel, WindowConstants)
 from javax.swing.filechooser import FileNameExtensionFilter
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 from org.openpnp.model import LengthUnit, Placement
@@ -337,6 +341,7 @@ class OrientationSetup(object):
         self.unverified = {}       # (board, ref) -> why the file could not be used for it
         self.last_import = ""
         self.fp_conflicts = {}
+        self.refusals = []         # (file, board, why) of files refused this session
         self._lib_index = None
         self._lib_cache = {}
         self.model = Model()
@@ -348,9 +353,8 @@ class OrientationSetup(object):
         self.summary = JLabel(" ")
         top.add(self.summary, BorderLayout.NORTH)
         srow = JPanel(FlowLayout(FlowLayout.LEFT))
-        srow.add(JButton("Import KiCad board (.kicad_pcb)...", actionPerformed=lambda e: self.import_file("kicad")))
-        srow.add(JButton("Import copper Gerber (X2)...", actionPerformed=lambda e: self.import_file("gerber")))
-        srow.add(JButton("Footprint library (.pretty)...", actionPerformed=lambda e: self.add_library()))
+        srow.add(JButton("Load CAD data (board / Gerber / library)...", actionPerformed=lambda e: self.load_cad()))
+        srow.add(JButton("Detection report...", actionPerformed=lambda e: self.report()))
         self.only = JCheckBox("only parts where orientation matters", True, actionPerformed=lambda e: self.refresh())
         srow.add(self.only)
         self.sources = JLabel(" ")
@@ -440,6 +444,7 @@ class OrientationSetup(object):
         else:                                                    # Gerber: only what was verified
             learn = [dict(r, ref=ref, side="top") for ref, r in res["results"].items() if r["ok"]]
         good, bad = ori.learn_footprints(learn)                  # pin 1 by footprint name, for later boards
+        res["learned"] = len(good)
         for k, i in good.items():
             c = self.store.set_footprint(k, i, i["source"], False)
             if c:
@@ -451,6 +456,81 @@ class OrientationSetup(object):
                 path, self.board_key(bl), res["verified"], res["placements"],
                 "; REFUSED: " + res["refused"] if res.get("refused") else ""))
         return res
+
+    def load_cad(self):
+        """One entry for every CAD input: file, folder or zip; classified, then imported / added."""
+        ch = JFileChooser(self.store.data.get("last_dir") or os.path.expanduser("~"))
+        ch.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES)
+        ch.setDialogTitle("KiCad board, top copper Gerber X2 (file / folder / zip) or footprint library folder")
+        ch.setAcceptAllFileFilterUsed(True)
+        ch.setFileFilter(FileNameExtensionFilter("Board, Gerber, zip (*.kicad_pcb, *.gbr, *.gtl, *.zip)",
+                                                 ["kicad_pcb", "gbr", "gtl", "gbx", "zip", "kicad_mod"]))
+        if ch.showOpenDialog(self.frame) != JFileChooser.APPROVE_OPTION:
+            return
+        return self.load_path(str(ch.getSelectedFile().getAbsolutePath()))
+
+    def load_path(self, path):
+        r = ori.classify_input(path, os.path.join(oppnp.lumen_dir(scripting), "cad"))
+        self.log("load %s: %s" % (path, r))
+        if not r.get("kind"):
+            JOptionPane.showMessageDialog(self.frame, "Not loaded:\n%s" % r["error"])
+            return r
+        if r["kind"] == "library":
+            self.add_library_dir(r["path"])
+        else:
+            self.add_source(r["kind"], r["path"])
+        return r
+
+    def why_unknown(self, x, unver, fkey, sources):
+        """Why the CAD pin 1 of a part is not known, and what to do."""
+        if unver:
+            return "; ".join(unver[:2]) + (" +%d" % (len(unver) - 2) if len(unver) > 2 else "")
+        if not sources and not ori.library_dirs(self.store.data["lib_dirs"]) and not self.store.data["footprints"]:
+            return "no CAD data loaded - Load CAD data (board, top copper Gerber X2 or footprint library), or set pin 1 in Check"
+        li = self.lib_info(fkey) if fkey else None
+        if li is not None and not li.get("dot"):
+            return "footprint %s in the library: %s - set pin 1 in Check" % (fkey, li.get("note") or "pin 1 unknown")
+        if not fkey:
+            return "the part has no package / footprint name - load the board file (.kicad_pcb), or set pin 1 in Check"
+        return ("footprint %s is not in the loaded board / Gerber / libraries - load the board or library that has it, "
+                "or set pin 1 in Check" % fkey)
+
+    def report(self):
+        """Detection report: per part where orientation matters, where CAD pin 1 comes from, or why not."""
+        rows = {}
+        for x in self.all_rows:
+            rows.setdefault(x["part_id"], x)
+        rel = [x for x in rows.values() if x["matters"] is not False]
+        got = [x for x in rel if x.get("cad_dot")]
+        miss = [x for x in rel if not x.get("cad_dot")]
+        L = ["Orientation detection report  %s" % time.strftime("%Y-%m-%d %H:%M"), ""]
+        L.append("CAD data: %s" % self.sources.getText().replace("CAD: ", ""))
+        for fn, bname, why in self.refusals:
+            L.append("REFUSED %s for %s: %s" % (fn, bname, why))
+        L.append("")
+        L.append("Parts where orientation matters: %d - pin 1 detected %d, NOT detected %d; not relevant (hidden): %d"
+                 % (len(rel), len(got), len(miss), len(rows) - len(rel)))
+        L.append("")
+        for x in sorted(miss, key=lambda x: x["part_id"]):
+            L.append("NOT DETECTED  %-28s %-34s %s\n              -> %s" % (x["part_id"], (x.get("footprint") or "-").split(":")[-1],
+                                                                       x["refs"], x.get("why") or "set pin 1 in Check"))
+        for x in sorted(got, key=lambda x: x["part_id"]):
+            how = "confirmed" if x["cad_ok"] else "auto, confirm in Check"
+            L.append("pin 1 %-6s  %-28s %-34s %s  [%s; %s]" % (x["cad_dot"], x["part_id"], (x.get("footprint") or "-").split(":")[-1],
+                                                               x["refs"], x.get("cad_source") or "?", how))
+        text = "\n".join(L)
+        p = os.path.join(oppnp.lumen_dir(scripting), "logs", "orientation-report-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+        f = open(p, "w")
+        try:
+            f.write(text + "\n")
+        finally:
+            f.close()
+        ta = JTextArea(text, 24, 120)
+        ta.setEditable(False)
+        ta.setFont(Font("Monospaced", Font.PLAIN, 12))
+        JOptionPane.showMessageDialog(self.frame, JScrollPane(ta), "Detection report (saved: %s)" % p, JOptionPane.PLAIN_MESSAGE)
+        self.log("detection report %s: %d detected, %d not detected" % (p, len(got), len(miss)))
+        return text
 
     def import_file(self, kind):
         ch = JFileChooser(self.store.data.get("last_dir") or os.path.expanduser("~"))
@@ -484,7 +564,12 @@ class OrientationSetup(object):
             res = self.load_source(src, bl)
             bname = bl.getBoard().getName() or bkey
             if res.get("refused"):
-                lines.append("%s: NOT USED - %s" % (bname, res["refused"]))
+                lines.append("%s: NOT USED for the positions - %s" % (bname, res["refused"]))
+                if (os.path.basename(path), bname, res["refused"]) not in self.refusals:
+                    self.refusals.append((os.path.basename(path), bname, res["refused"]))
+                if res.get("learned"):
+                    lines.append("   but pin 1 BY FOOTPRINT NAME was taken from it for %d footprint(s): right if the footprints "
+                                 "did not change between the revisions - confirm once per part in Check." % res["learned"])
                 continue
             lst = self.store.data["board_sources"].setdefault(bkey, [])
             if src not in lst:
@@ -616,19 +701,28 @@ class OrientationSetup(object):
                 need, st = ori.status(matters, cad_dot, x["cad_ok"], x["feeder_dot"], x["feeder_ok"], x["feeder_rot"])
                 if f is None and matters is not False and cad_dot:
                     st = "no feeder has this part" + ("" if x["cad_ok"] else " (CAD mark not confirmed)")
-                if unver:                                  # a CAD file is loaded but could not verify these refs
+                if unver and not cad_dot:                  # a CAD file is loaded but could not verify these refs
                     st = "NOT VERIFIED %s; %s" % ("; ".join(unver[:2]) + (" +%d" % (len(unver) - 2) if len(unver) > 2 else ""), st)
+                elif unver:
+                    st = "%s (board file not verified for %s)" % (st, ", ".join(u.split(" ")[0] for u in unver[:3]))
+                if not cad_dot and matters is not False:
+                    x["why"] = self.why_unknown(x, unver, fkey, self.board_srcs)
+                    st = "CAD pin 1 NOT DETECTED: %s" % x["why"]
                 x["need"], x["status"] = need, note + st
                 rows.append(x)
+        self.all_rows = rows
         shown = [x for x in rows if not self.only.isSelected() or x["matters"] is not False]
         self.model.rows = shown
         self.model.fireTableDataChanged()
         rel = [x for x in rows if x["matters"] is not False]
         ok = len([x for x in rel if x["status"].startswith("CORRECT")])
         bad = len([x for x in rel if "MISMATCH" in x["status"]])
+        nd = len(set(x["part_id"] for x in rel if not x.get("cad_dot")))
         self.summary.setText("<html>%d part/feeder row(s) where orientation matters: <font color='green'>%d correct "
-                             "(confirmed)</font>, <font color='red'>%d mismatch</font>, %d to check</html>" % (
-                                 len(rel), ok, bad, len(rel) - ok - bad))
+                             "(confirmed)</font>, <font color='red'>%d mismatch</font>, %d to check%s</html>" % (
+                                 len(rel), ok, bad, len(rel) - ok - bad,
+                                 "" if not nd else " - <font color='red'><b>CAD pin 1 not detected for %d part(s)</b></font> "
+                                 "(Detection report)" % nd))
         names = [os.path.basename(s.split(":", 1)[1]) for s in sorted(self.board_srcs)]
         names += [os.path.basename(d) + "/" for d in ori.library_dirs(self.store.data["lib_dirs"])]
         nfp = len(self.store.data["footprints"])
