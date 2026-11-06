@@ -155,8 +155,11 @@ class PartCheck(object):
             self.pv_fields[t] = fld
             vrow.add(fld)
         vrow.add(JLabel("counts (default ~30 % of free air - covered: N045 3, N08 7); then"))
-        self.pv_action = JComboBox(["log only", "re-centre at the next feed", "recycle, synchronise and pick again"])
-        self.pv_action.setSelectedIndex(list(pickvac.ACTIONS).index(pv.get("action", "recenter")))
+        self.pv_action = JComboBox(["log only", "re-centre at the next feed",
+                                    "return to feeder, synchronise and pick again (recycle)",
+                                    "discard, synchronise and pick again (part wasted)"])
+        act = {"repick": "discard"}.get(pv.get("action", "recenter"), pv.get("action", "recenter"))
+        self.pv_action.setSelectedIndex(list(pickvac.ACTIONS).index(act) if act in pickvac.ACTIONS else 1)
         vrow.add(self.pv_action)
         vrow.add(JButton("Save", actionPerformed=lambda e: self.save_pickvac()))
         vrow.add(JButton("Pick retries for the job's parts...", actionPerformed=lambda e: self.pick_retries()))
@@ -221,7 +224,7 @@ class PartCheck(object):
         self.log("pick vacuum check: %s" % self.pv)
         self.info.setText("pick vacuum check %s, thresholds %s, action %s" % ("ON" if self.pv["enabled"] else "off", thr,
                                                                              self.pv["action"]))
-        if self.pv["enabled"] and self.pv["action"] == "repick":
+        if self.pv["enabled"] and self.pv["action"] in ("return", "discard"):
             zero = self.job_parts_without_retry()
             if zero:
                 JOptionPane.showMessageDialog(self.frame, "'Pick again' needs the part's pick retry count >= 1.\n"
