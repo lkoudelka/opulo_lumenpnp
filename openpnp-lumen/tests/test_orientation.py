@@ -107,5 +107,75 @@ st.set_feeder("SOT23-X", "F1", "BR", True, 90)
 st.save()
 st2 = o.Store(st.path)
 check("store round trip", st2.part("SOT23-X")["feeders"]["F1"]["applied"] == 90 and st2.part("SOT23-X")["cad"]["dot"] == "BL")
+
+print("position file only (.pos): pin 1 by footprint name")
+tmp = tempfile.mkdtemp()
+pos = os.path.join(tmp, "b-top.pos")
+open(pos, "w").write("""### Footprint positions - created on 2026-11-06T10:50:11+0100 ###
+### Printed by KiCad version 9.0.0
+## Unit = mm, Angle = deg.
+## Side : top
+# Ref     Val                   Package                                       PosX       PosY       Rot  Side
+C60       4.7_uF                C_0402_1005Metric                          13.0750    92.5900  -90.0000  top
+U15       STM32WBA65CIx         UFQFPN-48_STM                              18.7500    95.6300   90.0000  top
+REF**     Fiducial_1mm_Mask2mm  Fiducial_1mm_Mask2mm                       12.0000   104.5000    0.0000  top
+## End
+""")
+rows = o.parse_kicad_pos(pos)
+check("KiCad 9 ASCII .pos parsed (-90 kept as -90, values with _)", [(r["ref"], r["footprint"], r["rot"]) for r in rows] ==
+      [("C60", "C_0402_1005Metric", -90.0), ("U15", "UFQFPN-48_STM", 90.0), ("REF**", "Fiducial_1mm_Mask2mm", 0.0)]
+      and rows[0]["value"] == "4.7_uF", rows)
+csvp = os.path.join(tmp, "b-top-pos.csv")
+open(csvp, "w").write('Ref,Val,Package,PosX,PosY,Rot,Side\n"U15","STM32WBA65CIx","UFQFPN-48_STM",18.75,95.63,270,top\n')
+check("KiCad CSV position file parsed (270 -> -90)", [(r["ref"], r["rot"]) for r in o.parse_kicad_pos(csvp)] == [("U15", -90.0)])
+check("no pad data: R/C/L not relevant, U/D/CR matter, fiducial not, unknown ?", [o.orientation_matters(r, f, None) for r, f in
+      (("C60", "C_0402_1005Metric"), ("U15", "UFQFPN-48_STM"), ("CR1", "ZDO_1610_STM"), ("D1", "LED-SK6805SIDE-G-003"),
+       ("REF**", "Fiducial_1mm_Mask2mm"), ("Y1", "Crystal_SMD_2016-4Pin"))] == [False, True, True, True, False, None])
+check("footprint key ignores the library nickname", o.footprint_key("Package_QFP:LQFP-48_7x7mm_P0.5mm") == "LQFP-48_7x7mm_P0.5mm")
+
+libs = [os.path.join(REPOS, "opulo_feeder/lib/kicad"), os.path.join(REPOS, "opulo_lumenpnp/lib/kicad")]
+idx = o.index_libraries(libs)
+qfn = o.parse_kicad_mod(idx["QFN-32-No-Paste"])
+check(".kicad_mod: QFN-32 pin 1 top-left, matters", qfn["dot"] == "TL" and qfn["matters"] and qfn["pins"] >= 32, qfn["source"])
+agree, dis = 0, []
+for root, _, files in os.walk(REPOS):
+    if "/_dev" in root or "node_modules" in root:
+        continue
+    for fn in files:
+        if fn.endswith(".kicad_pcb"):
+            for ref, i in o.parse_kicad_pcb(os.path.join(root, fn)).items():
+                k = o.footprint_key(i["footprint"])
+                if k in idx and i["dot"]:
+                    if o.parse_kicad_mod(idx[k])["dot"] == i["dot"]:
+                        agree += 1
+                    else:
+                        dis.append((fn, ref, k))
+check("library pin 1 == placed footprint on every Opulo board that uses it", agree > 50 and not dis, "%d agree %s" % (agree, dis[:3]))
+good, bad = o.learn_footprints(mobo.values())
+check("learn from a board: one entry per footprint, LQFP-48 TL, no disagreement", good["LQFP-48_7x7mm_P0.5mm"]["dot"] == "TL"
+      and not bad and len(good) >= 10, len(good))
+bad_in = [dict(mobo["U1"]), dict(mobo["U1"])]
+bad_in[1]["dot"] = "TR"
+check("learn: refs of one footprint disagreeing are reported, not learned", o.learn_footprints(bad_in) == ({}, {"LQFP-48_7x7mm_P0.5mm": ["TL", "TR"]}))
+
+lib_i = {"dot": "TL", "source": "lib:x.kicad_mod", "pins": 48, "pads": []}
+pkg_i = {"dot": "TL", "source": "openpnp-package", "pins": 48, "pads": []}
+r = o.resolve_footprint("X", None, None, lib_i)
+check("resolve: library only -> auto (not confirmed)", r["dot"] == "TL" and not r["confirmed"] and r["source"].startswith("lib:"))
+r = o.resolve_footprint("X", {"dot": "TL", "source": "manual", "confirmed": True}, pkg_i, lib_i)
+check("resolve: confirmed table entry first, agreeing sources -> no conflict", r["confirmed"] and r["source"] == "table:manual" and not r["conflict"])
+r = o.resolve_footprint("X", {"dot": "BL", "source": "manual", "confirmed": True}, None, lib_i)
+check("resolve: confirmed BL vs library TL -> conflict shown", r["dot"] == "BL" and r["conflict"] == ["TL (lib:x.kicad_mod)"], r)
+check("resolve: nothing known -> None", o.resolve_footprint("X") is None)
+pk = o.package_cad_info("SOT-23", [("1", -0.95, 1.1), ("2", 0.95, 1.1), ("3", 0.0, -1.1)])
+check("OpenPnP package footprint (Y up): SOT-23 pin 1 top-left", pk["dot"] == "TL")
+check("OpenPnP package footprint without pad names -> None", o.package_cad_info("X", [("", 0, 0), ("", 1, 0)]) is None)
+st = o.Store(os.path.join(tmp, "o.json"))
+st.set_footprint("Package_QFP:LQFP-48", {"dot": "TL", "pins": 48}, "manual", True)
+c = st.set_footprint("LQFP-48", {"dot": "TR", "pins": 48}, "kicad:other.kicad_pcb", False)
+check("store: confirmed footprint not overwritten by an automatic TR, conflict returned",
+      c == "TR" and st.data["footprints"]["LQFP-48"]["dot"] == "TL" and st.data["footprints"]["LQFP-48"]["confirmed"])
+st.save()
+check("store: footprint table persists", o.Store(st.path).data["footprints"]["LQFP-48"]["source"] == "manual")
 print("\n%d/%d checks passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

@@ -5,7 +5,10 @@
 # the top camera view) and in the CAD footprint at 0 deg (right square)?  From the two marks
 # the rotation in the feeder is calculated and can be applied to the feeder.
 # The CAD mark can be detected automatically from the KiCad .kicad_pcb or from KiCad copper
-# Gerbers with X2 attributes; every mark is confirmed by you in the two squares, and the list
+# Gerbers with X2 attributes.  With only a position file (.pos) it is found by footprint name:
+# footprint libraries (.pretty), the OpenPnP package footprint, or the footprint table that
+# every import and confirmation fills (pin 1 of a footprint is the same on every board).
+# Every mark is confirmed by you in the two squares, and the list
 # shows what is confirmed and whether the feeder rotation is correct.  Nothing is changed
 # without "Apply".
 from __future__ import absolute_import, division, print_function
@@ -248,6 +251,9 @@ class CheckDialog(object):
         st = self.owner.store
         src = r.get("cad_source") if self.right.dot == r.get("cad_dot") else "manual"
         st.set_cad(r["part_id"], self.right.dot, src or "manual", True)
+        if r.get("footprint"):                         # pin 1 of the footprint: reused on every later board
+            st.set_footprint(r["footprint"], {"dot": self.right.dot, "pins": r.get("pins"), "pads": r.get("pads")},
+                             (src or "manual").replace("table:", ""), True)
         applied = None
         if r.get("feeder") is not None and self.left.dot:
             need = self.need()
@@ -321,9 +327,10 @@ class OrientationSetup(object):
     def __init__(self):
         self.store = ori.Store(os.path.join(oppnp.lumen_dir(scripting), "orientation.json"))
         self.log = oppnp.FileLog(scripting, "orientation")
-        self.cad = {}
-        for src in self.store.data["sources"]:
-            self.load_source(src, quiet=True)
+        self._parsed = {}          # (source, board) -> {ref: cad info}
+        self.fp_conflicts = {}
+        self._lib_index = None
+        self._lib_cache = {}
         self.model = Model()
         f = self.frame = JFrame("Orientation setup (optional helper)")
         f.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE)
@@ -335,6 +342,7 @@ class OrientationSetup(object):
         srow = JPanel(FlowLayout(FlowLayout.LEFT))
         srow.add(JButton("Import KiCad board (.kicad_pcb)...", actionPerformed=lambda e: self.import_file("kicad")))
         srow.add(JButton("Import copper Gerber (X2)...", actionPerformed=lambda e: self.import_file("gerber")))
+        srow.add(JButton("Footprint library (.pretty)...", actionPerformed=lambda e: self.add_library()))
         self.only = JCheckBox("only parts where orientation matters", True, actionPerformed=lambda e: self.refresh())
         srow.add(self.only)
         self.sources = JLabel(" ")
@@ -362,32 +370,61 @@ class OrientationSetup(object):
         self.refresh()
         f.setVisible(True)
 
-    # -- CAD sources --------------------------------------------------------------------
-    def load_source(self, src, quiet=False):
+    # -- CAD sources (bound to the OpenPnP board they were imported for) -------------------
+    @staticmethod
+    def board_key(bl):
+        b = bl.getBoard()
+        f = b.getFile() if b is not None else None
+        return str(f.getAbsolutePath()) if f is not None else "name:%s" % (b.getName() if b is not None else "?")
+
+    def sources_for(self, bkey):
+        """Legacy global sources (older orientation.json) + the ones imported for this board."""
+        return list(self.store.data["sources"]) + [s for s in self.store.data["board_sources"].get(bkey, [])
+                                                   if s not in self.store.data["sources"]]
+
+    def cad_for(self, bl):
+        bkey = self.board_key(bl)
+        cad = {}
+        for src in self.sources_for(bkey):
+            found = self.load_source(src, bl, quiet=True)
+            for ref, i in found.items():
+                if ref not in cad or src.startswith("kicad:"):
+                    cad[ref] = i
+        return cad
+
+    def load_source(self, src, bl, quiet=False):
+        key = (src, self.board_key(bl) if src.startswith("gerber:") else None)
+        if key in self._parsed:
+            return self._parsed[key]
         kind, path = src.split(":", 1)
         try:
             if kind == "kicad":
                 found = ori.parse_kicad_pcb(path)
             else:
-                job = gui.getJobTab().getJob()
                 pl = {}
-                for bl, p, _ in jobinfo.job_placements(job):
+                for p in bl.getPlacementsHolder().getPlacements():
                     pk = p.getPart().getPackage().getId() if p.getPart() and p.getPart().getPackage() else ""
                     pl[str(p.getId())] = (p.getLocation().getRotation(), pk)
                 found = ori.gerber_cad_info(ori.parse_gerber_pins(path), pl)
                 for i in found.values():
                     i["source"] = "gerber:" + os.path.basename(path)
-            for ref, i in found.items():
-                if ref not in self.cad or kind == "kicad":
-                    self.cad[ref] = i
+            self._parsed[key] = found
+            good, bad = ori.learn_footprints(found.values())       # pin 1 by footprint name, for later boards
+            for k, i in good.items():
+                c = self.store.set_footprint(k, i, i["source"], False)
+                if c:
+                    self.fp_conflicts[k] = "%s says %s" % (i["source"], c)
+            for k, dots in bad.items():
+                self.fp_conflicts[k] = "refs disagree (%s) in %s" % (", ".join(dots), os.path.basename(path))
             if not quiet:
                 self.log("imported %s: %d footprints, %d with pin 1" % (path, len(found),
                                                                         len([i for i in found.values() if i["dot"]])))
-            return len(found)
+            return found
         except (Exception, JavaException) as e:
             if not quiet:
                 JOptionPane.showMessageDialog(self.frame, "Cannot read %s: %s" % (path, e))
-            return 0
+            self._parsed[key] = {}
+            return {}
 
     def import_file(self, kind):
         ch = JFileChooser(self.store.data.get("last_dir") or os.path.expanduser("~"))
@@ -401,43 +438,127 @@ class OrientationSetup(object):
         self.add_source(kind, path)
 
     def add_source(self, kind, path):
-        n = self.load_source("%s:%s" % (kind, path))
+        """Import for the board(s) of the open job (refs are only meaningful on their own board)."""
+        job = gui.getJobTab().getJob()
+        bls = [bl for bl in (job.getBoardLocations() if job is not None else []) if bl.getBoard() is not None]
+        if not bls:
+            JOptionPane.showMessageDialog(self.frame, "Open the job with the board first.")
+            return
+        src = "%s:%s" % (kind, path)
+        for k in [k for k in self._parsed if k[0] == src]:
+            del self._parsed[k]
+        n = 0
+        for bl in bls:
+            n = max(n, len(self.load_source(src, bl)))
+            if n:
+                lst = self.store.data["board_sources"].setdefault(self.board_key(bl), [])
+                if src not in lst:
+                    lst.append(src)
         if kind == "gerber" and n == 0:
             JOptionPane.showMessageDialog(self.frame, "No pin attributes found. Use a COPPER layer exported by KiCad\n"
                                           "with 'Use extended X2 format' and 'Include netlist attributes'.")
-        src = "%s:%s" % (kind, path)
-        if n and src not in self.store.data["sources"]:
-            self.store.data["sources"].append(src)
         self.store.data["last_dir"] = os.path.dirname(path)
         self.store.save()
         self.refresh()
+
+    def add_library(self):
+        ch = JFileChooser(self.store.data.get("last_dir") or os.path.expanduser("~"))
+        ch.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY)
+        ch.setDialogTitle("Folder with KiCad footprints (a .pretty folder or a folder of them)")
+        if ch.showOpenDialog(self.frame) != JFileChooser.APPROVE_OPTION:
+            return
+        self.add_library_dir(str(ch.getSelectedFile().getAbsolutePath()))
+
+    def add_library_dir(self, path):
+        n = len(ori.index_libraries([path]))
+        if n == 0:
+            JOptionPane.showMessageDialog(self.frame, "No .kicad_mod footprints found in %s" % path)
+            return
+        if path not in self.store.data["lib_dirs"]:
+            self.store.data["lib_dirs"].append(path)
+        self.store.data["last_dir"] = os.path.dirname(path)
+        self.store.save()
+        self._lib_index = None
+        self.log("footprint library %s: %d footprints" % (path, n))
+        self.refresh()
+
+    def lib_info(self, key):
+        if self._lib_index is None:
+            self._lib_index = ori.index_libraries(ori.library_dirs(self.store.data["lib_dirs"]))
+        path = self._lib_index.get(key)
+        if path is None:
+            return None
+        if path not in self._lib_cache:
+            try:
+                self._lib_cache[path] = ori.parse_kicad_mod(path)
+            except Exception:
+                self._lib_cache[path] = None
+        return self._lib_cache[path]
+
+    @staticmethod
+    def package_info(part):
+        pk = part.getPackage()
+        fp = pk.getFootprint() if pk is not None else None
+        if fp is None or not fp.getPads():
+            return None
+        return ori.package_cad_info(str(pk.getId()), [(str(p.getName() or ""), p.getX(), p.getY()) for p in fp.getPads()])
+
+    def footprint(self, part, infos):
+        key = ori.footprint_key(infos[0]["footprint"] if infos else
+                                (str(part.getPackage().getId()) if part.getPackage() is not None else ""))
+        if not key:
+            return key, None
+        r = ori.resolve_footprint(key, self.store.data["footprints"].get(key), self.package_info(part), self.lib_info(key))
+        if r is not None and key in self.fp_conflicts:
+            r["conflict"] = r["conflict"] + [self.fp_conflicts[key]]
+        return key, r
 
     # -- list ---------------------------------------------------------------------------
     def refresh(self):
         job = gui.getJobTab().getJob()
         rows = []
         by_part = {}
+        cads = {}
+        self.board_srcs = set()
         if job is not None:
             for bl, pl, placed in jobinfo.job_placements(job):
                 part = pl.getPart()
                 if part is None:
                     continue
-                by_part.setdefault(str(part.getId()), (part, []))[1].append(str(pl.getId()))
-        for pid, (part, refs) in sorted(by_part.items()):
-            infos = [self.cad[r] for r in refs if r in self.cad]
+                bk = self.board_key(bl)
+                if bk not in cads:
+                    cads[bk] = self.cad_for(bl)
+                    self.board_srcs.update(self.sources_for(bk))
+                ent = by_part.setdefault(str(part.getId()), (part, [], []))
+                ent[1].append(str(pl.getId()))
+                if str(pl.getId()) in cads[bk]:
+                    ent[2].append(cads[bk][str(pl.getId())])
+        for pid, (part, refs, infos) in sorted(by_part.items()):
             dots = sorted(set(i["dot"] for i in infos if i["dot"]))
+            fkey, fp = self.footprint(part, infos)
             sp = self.store.data["parts"].get(pid, {})
             matters = sp.get("matters")
             if matters is None and infos:
                 matters = any(i["matters"] for i in infos)
+            if matters is None:                        # position file only: footprint pins, else the reference
+                matters = ori.orientation_matters(refs[0], fkey, fp["pins"] if fp and fp.get("pins") else None)
             cad_rec = sp.get("cad") or {}
-            cad_dot = cad_rec.get("dot") or (dots[0] if len(dots) == 1 else None)
+            board_dot = dots[0] if len(dots) == 1 else None
+            cad_dot = cad_rec.get("dot") or board_dot or (fp["dot"] if fp and not dots else None)
             note = "" if len(dots) <= 1 else "refs disagree on pin 1 (%s): " % ", ".join(dots)
+            if fp and fp["conflict"]:
+                note += "footprint sources disagree: %s (%s) vs %s: " % (fp["dot"], fp["source"], "; ".join(fp["conflict"]))
+            elif fp and fp["confirmed"] and board_dot and board_dot != fp["dot"]:
+                note += "board says %s, confirmed footprint %s: " % (board_dot, fp["dot"])
+            from_fp = bool(fp) and not cad_rec.get("dot") and not dots
+            fp_ok = bool(fp) and fp["confirmed"] and fp["dot"] == cad_dot and not fp["conflict"]
             base = {"part_id": pid, "part": part, "refs": ", ".join(refs[:6]) + (" +%d" % (len(refs) - 6) if len(refs) > 6 else ""),
-                    "footprint": infos[0]["footprint"] if infos else (part.getPackage().getId() if part.getPackage() else ""),
-                    "pads": infos[0]["pads"] if infos else [], "matters": matters, "cad_dot": cad_dot,
-                    "cad_ok": bool(cad_rec.get("confirmed")) and cad_rec.get("dot") == cad_dot,
-                    "cad_source": cad_rec.get("source") if cad_rec else (infos[0]["source"] if infos else None)}
+                    "footprint": infos[0]["footprint"] if infos else fkey,
+                    "pads": infos[0]["pads"] if infos else (fp["pads"] if fp else []), "matters": matters, "cad_dot": cad_dot,
+                    "pins": infos[0]["pins"] if infos else (fp["pins"] if fp else None),
+                    "cad_ok": (bool(cad_rec.get("confirmed")) and cad_rec.get("dot") == cad_dot) or fp_ok,
+                    "cad_source": cad_rec.get("source") if cad_rec else (infos[0]["source"] if infos else
+                                                                         (fp["source"] if from_fp else None))}
             feeders = [f for f in machine.getFeeders() if f.getPart() == part]
             for f in feeders or [None]:
                 x = dict(base)
@@ -463,7 +584,10 @@ class OrientationSetup(object):
         self.summary.setText("<html>%d part/feeder row(s) where orientation matters: <font color='green'>%d correct "
                              "(confirmed)</font>, <font color='red'>%d mismatch</font>, %d to check</html>" % (
                                  len(rel), ok, bad, len(rel) - ok - bad))
-        self.sources.setText("CAD: " + (", ".join(os.path.basename(s.split(":", 1)[1]) for s in self.store.data["sources"]) or "none (optional)"))
+        names = [os.path.basename(s.split(":", 1)[1]) for s in sorted(self.board_srcs)]
+        names += [os.path.basename(d) + "/" for d in ori.library_dirs(self.store.data["lib_dirs"])]
+        nfp = len(self.store.data["footprints"])
+        self.sources.setText("CAD: " + (", ".join(names) or "none (optional)") + (" | footprint table: %d" % nfp if nfp else ""))
 
     def selected(self):
         i = self.table.getSelectedRow()

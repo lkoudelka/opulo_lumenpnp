@@ -10,6 +10,8 @@ side (pin 1 left -> TL, top -> TR, right -> BR, bottom -> BL), which rotates con
 
 - CAD dot: pin 1 in the footprint's own 0 deg orientation, detected from a KiCad
   .kicad_pcb (pad "1" position) or from KiCad copper Gerbers with X2 attributes (%TO.P%).
+  With only a position file (.pos), by footprint NAME: footprint library (.kicad_mod),
+  OpenPnP package footprint, or the footprint table learned from earlier boards/confirmations.
 - Feeder dot: pin 1 as the part sits in the feeder, seen from above in machine
   coordinates (X to the right, Y up, as in OpenPnP's camera view).
 - Rotation in feeder = angle(feeder dot) - angle(CAD dot): the value OpenPnP needs as the
@@ -76,7 +78,16 @@ NONPOLAR_REF = re.compile(r"^(R|C|L|FB|F|RN|JP|TP|FID|H|MH|SW|NT)\d", re.I)
 
 
 def orientation_matters(ref, footprint, n_pins):
-    """True / False (best guess, the user can override)."""
+    """True / False / None (best guess, the user can override).  n_pins None = no pad data
+    (only a position file): the guess is made from the reference prefix alone."""
+    if re.search(r"Fiducial|MountingHole|TestPoint", footprint or "", re.I):
+        return False
+    if n_pins is None:
+        if NONPOLAR_REF.match(ref or "") and not POLARIZED_2PIN.search(footprint or ""):
+            return False
+        if re.match(r"^(U|IC|Q|D|LED|CR|VD|J|P|CN|X|T)\d", ref or "", re.I):
+            return True
+        return None
     if n_pins >= 3:
         return True
     if n_pins <= 1:
@@ -265,6 +276,144 @@ def gerber_cad_info(pins_by_ref, placements):
 
 
 # ---------------------------------------------------------------------------------------
+# Position files and footprints by NAME
+#
+# A position file (.pos / CPL) has no pad data, only the footprint name and the rotation.
+# Pin 1 in the footprint 0 deg frame is a property of the footprint, the same on every
+# board, so it is looked up by name: footprint library (.kicad_mod), the OpenPnP package
+# footprint, or the footprint table learned from earlier imports and confirmations.
+# ---------------------------------------------------------------------------------------
+def footprint_key(name):
+    """'Capacitor_SMD:C_0402_1005Metric' and 'C_0402_1005Metric' are the same footprint."""
+    return (name or "").split(":")[-1].strip()
+
+
+def parse_kicad_pos(path):
+    """KiCad footprint position file, ASCII (.pos) or CSV: [{ref, value, footprint, x, y, rot, side}]."""
+    f = open(path)
+    try:
+        lines = f.read().splitlines()
+    finally:
+        f.close()
+    out = []
+    csv_hdr = None
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if csv_hdr is None and s.startswith(("Ref,", '"Ref",')):
+            csv_hdr = [c.strip('"') for c in s.split(",")]
+            continue
+        if csv_hdr:
+            cols = [c.strip().strip('"') for c in s.split(",")]
+            if len(cols) < len(csv_hdr):
+                continue
+            row = dict(zip(csv_hdr, cols))
+            ref, val, fp = row.get("Ref"), row.get("Val"), row.get("Package")
+            x, y, rot, side = row.get("PosX"), row.get("PosY"), row.get("Rot"), row.get("Side")
+        else:
+            cols = s.split()
+            if len(cols) < 7:
+                continue
+            ref, val, fp, x, y, rot, side = cols[0], " ".join(cols[1:-5]), cols[-5], cols[-4], cols[-3], cols[-2], cols[-1]
+        try:
+            out.append({"ref": ref, "value": val, "footprint": fp, "x": float(x), "y": float(y),
+                        "rot": norm(float(rot)), "side": (side or "top").lower()})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def parse_kicad_mod(path):
+    """Footprint file -> cad info (pads Y up, pin 1 corner) in the footprint 0 deg frame."""
+    f = open(path)
+    try:
+        root = _sexpr(f.read())
+    finally:
+        f.close()
+    pads = []
+    for p in _kids(root, "pad"):
+        if len(p) < 3 or p[2] == "np_thru_hole":
+            continue
+        pat = (_kids(p, "at") or [["at", "0", "0"]])[0]
+        pads.append((p[1], float(pat[1]), -float(pat[2])))           # KiCad Y down -> Y up
+    info = cad_info(root[1] if len(root) > 1 else os.path.basename(path)[:-10], None, pads)
+    info["source"] = "lib:" + os.path.basename(path)
+    return info
+
+
+DEFAULT_LIB_DIRS = ("/usr/share/kicad/footprints", "/usr/local/share/kicad/footprints")
+
+
+def library_dirs(extra=()):
+    """Configured dirs first, then the KiCad stock library if installed (env KICADn_FOOTPRINT_DIR)."""
+    env = [os.environ[k] for k in sorted(os.environ) if re.match(r"KICAD\d*_FOOTPRINT_DIR$", k)]
+    seen, out = set(), []
+    for d in list(extra) + env + list(DEFAULT_LIB_DIRS):
+        if d and d not in seen and os.path.isdir(d):
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def index_libraries(dirs):
+    """{footprint name: path} of every *.kicad_mod below dirs (the first one found wins)."""
+    idx = {}
+    for d in dirs:
+        for root, _, files in os.walk(d):
+            for fn in sorted(files):
+                if fn.endswith(".kicad_mod"):
+                    idx.setdefault(fn[:-10], os.path.join(root, fn))
+    return idx
+
+
+def package_cad_info(name, pads):
+    """OpenPnP package footprint [(pad name, x, y)] (already Y up, as KicadModImporter stores it)."""
+    if not any(n == "1" for n, _, _ in pads):
+        return None
+    info = cad_info(name, None, pads)
+    info["source"] = "openpnp-package"
+    return info
+
+
+def learn_footprints(infos):
+    """From per-ref cad infos (KiCad board / Gerber): {footprint key: info} for footprints whose
+    refs all agree on pin 1, and {key: [dots]} for those that disagree (a rotation problem)."""
+    by = {}
+    for i in infos:
+        if i.get("dot") and i.get("side", "top") == "top":
+            by.setdefault(footprint_key(i["footprint"]), []).append(i)
+    good, bad = {}, {}
+    for k, lst in by.items():
+        dots = sorted(set(i["dot"] for i in lst))
+        if len(dots) == 1:
+            good[k] = lst[0]
+        else:
+            bad[k] = dots
+    return good, bad
+
+
+def resolve_footprint(key, table_rec=None, package_info=None, lib_info=None):
+    """Pin 1 of a footprint from the sources by name.  Order: confirmed table entry, OpenPnP
+    package footprint, footprint library, unconfirmed table entry (learned from a board or
+    Gerber).  Returns {dot, source, confirmed, pins, pads, conflict} or None."""
+    cands = []
+    if table_rec and table_rec.get("dot") and table_rec.get("confirmed"):
+        cands.append((table_rec["dot"], "table:" + (table_rec.get("source") or "?"), True, table_rec))
+    for i in (package_info, lib_info):
+        if i and i.get("dot"):
+            cands.append((i["dot"], i.get("source"), False, i))
+    if table_rec and table_rec.get("dot") and not table_rec.get("confirmed"):
+        cands.append((table_rec["dot"], "table:" + (table_rec.get("source") or "?"), False, table_rec))
+    if not cands:
+        return None
+    dot, src, ok, rec = cands[0]
+    others = sorted(set(c[0] for c in cands if c[0] != dot))
+    return {"dot": dot, "source": src, "confirmed": ok, "pins": rec.get("pins"), "pads": rec.get("pads") or [],
+            "conflict": ["%s (%s)" % (c[0], c[1]) for c in cands if c[0] in others]}
+
+
+# ---------------------------------------------------------------------------------------
 # Confirmation store  (~/.openpnp2/lumen/orientation.json)
 # ---------------------------------------------------------------------------------------
 class Store(object):
@@ -278,6 +427,9 @@ class Store(object):
             self.data = {}
         self.data.setdefault("parts", {})
         self.data.setdefault("sources", [])
+        self.data.setdefault("footprints", {})      # pin 1 by footprint name, reused on every board
+        self.data.setdefault("lib_dirs", [])
+        self.data.setdefault("board_sources", {})  # OpenPnP board -> [kicad:/gerber: files imported for it]
 
     def part(self, pid):
         return self.data["parts"].setdefault(pid, {"cad": {}, "feeders": {}, "matters": None})
@@ -291,6 +443,21 @@ class Store(object):
         if rotation_applied is not None:
             rec["applied"] = rotation_applied
         self.part(pid)["feeders"][feeder_id] = rec
+
+    def set_footprint(self, key, info, source, confirmed):
+        """Store pin 1 of a footprint.  A confirmed entry is never replaced by an automatic one
+        with a different corner: that returns the conflicting corner instead (shown in the list)."""
+        key = footprint_key(key)
+        old = self.data["footprints"].get(key)
+        dot = info.get("dot")
+        if not dot:
+            return None
+        if old and old.get("confirmed") and not confirmed:
+            return None if old.get("dot") == dot else dot
+        self.data["footprints"][key] = {"dot": dot, "source": source, "confirmed": bool(confirmed),
+                                        "pins": info.get("pins"), "pads": info.get("pads") or [],
+                                        "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        return None
 
     def save(self):
         d = os.path.dirname(self.path)
@@ -308,7 +475,7 @@ def status(matters, cad_dot, cad_ok, feeder_dot, feeder_ok, current_rot):
     if matters is False:
         return None, "orientation not relevant"
     if not cad_dot:
-        return None, "CAD pin 1 unknown: import KiCad / Gerber or set it in Check"
+        return None, "CAD pin 1 unknown: import KiCad board / Gerber / footprint library, or set it in Check"
     if not feeder_dot:
         return None, "feeder mark not set: Check"
     need = rotation_needed(feeder_dot, cad_dot)
