@@ -145,6 +145,42 @@ for script, key in TOOLS:
         check("example tooltip (return fails option) is the concrete text", tips and "Off (default)" in tips[0], tips[:1])
         hdr = [c for c in uihelp._walk(content) if c.getClass().getSimpleName() == "JTable"][0].getTableHeader()
         check("table header visible in the scroll pane (column tips)", hdr.isShowing() or hdr.getParent() is not None, hdr.getParent())
+    if script == "Feeder_Part_Check.py" and len(obj.opt_model.rows) >= 2:
+        import json as _j
+        from java.lang import Integer as _I
+        sf = os.path.join(sandbox, "lumen", "settings.json")
+        rows = obj.opt_model.rows
+        obj.tabs.setSelectedIndex(1)
+        obj.opt_table.setRowSelectionInterval(0, 1)
+        r0 = obj.opt_table.convertRowIndexToModel(0)
+        obj.opt_model.setValueAt(_I(2), r0, 4)
+        obj.opt_model.setValueAt("discard + pick again", r0, 10)
+        d = _j.load(open(sf))
+        hw = [obj.opt_model.rows[obj.opt_table.convertRowIndexToModel(i)]["hwid"] for i in (0, 1)]
+        own = [d.get("feeder_options", {}).get(h, {}) for h in hw]
+        check("options tab: edit with 2 rows highlighted -> own value for both", all(o.get("every") == 2 and o.get("action") == "discard"
+                                                                                   for o in own), own)
+        others = [x["hwid"] for x in rows if x["hwid"] not in hw]
+        check("other feeders unchanged (defaults)", all(h not in d.get("feeder_options", {}) for h in others), len(others))
+        shown = [str(obj.opt_model.getValueAt(r0, c)) for c in (4, 10, 12)]
+        check("table shows the own values", shown == ["2", "discard + pick again", "own: action, every"], shown)
+        obj.opt_table.setRowSelectionInterval(0, 0)
+        obj.opt_model.setValueAt(_I(0), r0, 4)
+        check("invalid value (every 0) refused, old value kept", _j.load(open(sf))["feeder_options"][hw[0]]["every"] == 2)
+        obj.opt_model.setValueAt(True, r0, 3)
+        obj.opt_table.setRowSelectionInterval(0, 1)
+        render(content, "help-part_check-options.png")
+        obj.reset_highlighted()
+        d = _j.load(open(sf))
+        check("reset highlighted: back to defaults, 'While feeding' tick kept",
+              d.get("feeder_options", {}).get(hw[0]) == {"watch": True} and hw[1] not in d.get("feeder_options", {}),
+              d.get("feeder_options"))
+        obj.every.setText("4")
+        obj.save_defaults()
+        d = _j.load(open(sf))
+        check("Save defaults: feedwatch / pickvac defaults stored, own values kept", d["feedwatch"]["every"] == 4
+              and d["feeder_options"].get(hw[0]) == {"watch": True} and str(obj.opt_model.getValueAt(r0, 4)) == "4",
+              (d["feedwatch"], d["feeder_options"].get(hw[0]), str(obj.opt_model.getValueAt(r0, 4))))
     if script == "Orientation_Setup.py" and obj.model.rows:
         obj.table.setRowSelectionInterval(0, 0)
         Frame.instances = []

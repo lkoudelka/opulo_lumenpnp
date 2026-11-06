@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Pick location centring while feeding (Feeder.BeforeFeed hook, Jython, OpenPnP).
 
-For the feeders enabled in Scripts > Lumen > Feeder Part Check ("While feeding"), every N-th feed:
+For the feeders with "While feeding" on (Scripts > Lumen > Feeder Part Check, options per feeder:
+lumen.feederopts), every N-th feed of that feeder:
 the top camera looks at the pick pocket before the feed;
 - a part already in the pick pocket -> OpenPnP's feed option SkipNext (this feed is skipped);
 - pick location off the pocket centre (sprocket-hole geometry) by min..max mm -> moved onto the
   centre, after a confirmation dialog if "confirm" is set.
-Settings: ~/.openpnp2/lumen/settings.json key "feedwatch".  Never raises into the job (the event
+Settings: ~/.openpnp2/lumen/settings.json: defaults in key "feedwatch", own values per feeder in
+"feeder_options" (every, confirm, skip_if_part, max_mm can differ per feeder).  Never raises into the job (the event
 wrapper catches everything); feed counters live in JVM system properties (pooled script engines).
 """
 from __future__ import absolute_import, division, print_function
@@ -25,14 +27,32 @@ def config_dir():
     return str(Configuration.get().getConfigurationDirectory())
 
 
-def load_settings():
+def read_all():
+    """The whole settings.json as a dict ({} if missing / unreadable)."""
     p = os.path.join(config_dir(), "lumen", "settings.json")
     try:
-        d = json.load(open(p))
+        f = open(p)
+        try:
+            return json.load(f)
+        finally:
+            f.close()
     except (IOError, OSError, ValueError):
-        d = {}
+        return {}
+
+
+def load_settings():
     out = dict(DEFAULTS)
-    out.update(d.get("feedwatch") or {})
+    out.update(read_all().get("feedwatch") or {})
+    return out
+
+
+def feeder_settings(hwid, data=None):
+    """Defaults + this feeder's own options (lumen.feederopts)."""
+    from lumen import feederopts
+    data = read_all() if data is None else data
+    out = dict(DEFAULTS)
+    out.update(data.get("feedwatch") or {})
+    out.update(feederopts.effective(data, hwid))
     return out
 
 
@@ -74,16 +94,14 @@ def _ask(text):
 
 
 def _disable(hwid):
+    """'Stop for this feeder': its own 'while feeding' option off."""
+    from lumen import feederopts
     p = os.path.join(config_dir(), "lumen", "settings.json")
-    try:
-        d = json.load(open(p))
-    except (IOError, OSError, ValueError):
-        d = {}
-    fw = d.setdefault("feedwatch", {})
-    fw["feeders"] = [x for x in fw.get("feeders", []) if x != hwid]
+    d = read_all()
+    feederopts.set_own(d, hwid, "watch", False)
     tmp = p + ".tmp"
     f = open(tmp, "w")
-    json.dump(d, f, indent=2)
+    json.dump(d, f, indent=2, sort_keys=True)
     f.close()
     os.rename(tmp, p)
 
@@ -101,8 +119,8 @@ def before_feed(machine, feeder, nozzle=None):
             pass
     from java.lang import System
     forced = System.getProperty("lumen.feedwatch.force." + hwid) == "1"   # set by the pick vacuum check
-    st = load_settings()
-    if not forced and hwid not in [str(x).upper() for x in st["feeders"]]:
+    st = feeder_settings(hwid)
+    if not forced and not st.get("watch"):
         return None
     n = _count(hwid)
     every = max(1, int(st.get("every", 5)))

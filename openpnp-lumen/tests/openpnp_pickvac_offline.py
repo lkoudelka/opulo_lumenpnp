@@ -240,6 +240,67 @@ part.setPickRetryCount(old_retry)
 f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
 S.clearProperty(FORCE)
 
+S.out.println("options per feeder (settings.json feeder_options)")
+HW = "001980104648570520333535"
+part.setPickRetryCount(2)
+
+
+def own_pick(st, level):
+    S.clearProperty(FORCE)
+    S.clearProperty(BLOCKP)
+    f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
+    settings(st)
+    FakeNozzle.level = level
+    pickvac.remember_feed(fake, f48)
+    try:
+        return pickvac.after_pick(machine, fake, part), None
+    except (Exception, Throwable) as x:
+        return None, x
+
+
+base = {"pickvac": {"enabled": False, "threshold": {"N045": 3, "*": 3}, "action": "return"}}
+r, e = own_pick(dict(base, feeder_options={HW: {"pickvac": True}}), 230)
+check("default off, this feeder's own 'Vac check' on -> judged (return)", e is not None and "RETURNED" in str(e), str(e)[:80])
+r, e = own_pick(dict(base, feeder_options={HW: {"pickvac": True, "threshold": 10.0}}), 230)
+check("own threshold 10 counts: +6 is not an edge pick for this feeder", e is None and r is not None and not r["flagged"], r)
+r, e = own_pick(dict(base, feeder_options={HW: {"pickvac": True, "action": "discard"}}), 230)
+check("own action discard while the default is return", e is not None and "DISCARD" in str(e) and "RETURNED" not in str(e), str(e)[:80])
+pickvac.take_back = failing_take_back
+r, e = own_pick(dict(base, feeder_options={HW: {"pickvac": True, "fallback_feed_next": True}}), 230)
+check("own 'return fails: feed next' on: no block although the default is off", "DISCARD" in str(e) and S.getProperty(BLOCKP) is None)
+r, e = own_pick(dict(base, pickvac=dict(base["pickvac"], enabled=True), feeder_options={HW: {"pickvac": False}}), 230)
+check("default on, this feeder's own 'Vac check' off -> not judged", e is None and r is None, r)
+pickvac.take_back = fake_take_back
+st_other = pickvac.feeder_settings("FFFFFFFFFFFFFFFFFFFFFFFF", {"pickvac": {"enabled": True}, "feeder_options": {HW: {"pickvac": False}}})
+check("another feeder keeps the default", st_other["enabled"] is True)
+S.clearProperty(BLOCKP)
+S.clearProperty(FORCE)
+S.clearProperty("lumen.feedwatch.count." + HW)
+del calls[:]
+from lumen import feedercheck as fc_now        # the module copy the hook sees now (Scripting.on loaded its own)
+from lumen import feedwatch as fw_now
+fc_real = fc_now.check_feeder
+fc_now.check_feeder = lambda m, f, save=None: calls.append(f.getName()) or {"error": "camera replaced in this test"}
+feedwatch = fw_now
+settings({"feedwatch": {"every": 5}, "feeder_options": {HW: {"watch": True, "every": 2}}})
+for i in range(4):
+    feedwatch.before_feed(machine, f48, fake)
+check("own 'Every N' = 2 (default 5): camera check on feeds 1 and 3 of 4", len(calls) == 2, calls)
+del calls[:]
+S.clearProperty("lumen.feedwatch.count." + HW)
+settings({"feedwatch": {"every": 1, "feeders": [HW]}, "feeder_options": {HW: {"watch": False}}})
+feedwatch.before_feed(machine, f48, fake)
+check("own 'While feeding' off beats the older feeders list", not calls, calls)
+settings({"feedwatch": {"every": 1, "feeders": [HW]}})
+feedwatch.before_feed(machine, f48, fake)
+check("older settings (feeders list, no own values) still work", len(calls) == 1, calls)
+feedwatch._disable(HW)
+d = json.load(open(os.path.join(sandbox, "lumen", "settings.json")))
+check("'Stop for this feeder' = own 'While feeding' off", d["feeder_options"][HW]["watch"] is False and d["feedwatch"]["feeders"] == [], d)
+fc_now.check_feeder = fc_real
+part.setPickRetryCount(old_retry)
+f48.setFeedOptions(ReferenceFeeder.FeedOptions.Normal)
+
 S.out.println("identify packet (fake transport)")
 sent = []
 
