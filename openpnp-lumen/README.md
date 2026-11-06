@@ -93,7 +93,12 @@ Then use *Scripts > Refresh Scripts* in OpenPnP, or restart it. The installer ne
 - **Pick vacuum check** (`Events/Nozzle.AfterPick.py`, off by default):
   - Right after each pick the vacuum level is read with the part held. An edge pick seals worse, so the level is closer to free air.
   - Each feeder is compared with **its own typical good pick** (median of the last 10 good picks, after 3 learning picks).
-  - A level more than the threshold above it is logged (`PICKVAC` in the feedwatch log), and the next feed of that feeder runs the camera re-centring check (also for feeders not ticked "While feeding"; with confirmation if set).
+  - A level more than the threshold above it is logged (`PICKVAC` in the feedwatch log). Then, depending on the **action**:
+    - **log only**;
+    - **re-centre at the next feed** (default): the next feed of that feeder runs the camera re-centring check (also for feeders not ticked "While feeding"; with confirmation if set);
+    - **recycle, synchronise and pick again**: re-centring is requested and the hook makes the pick fail on purpose. OpenPnP's job processor then discards the part (discard location = recycle), feeds again (the feed hook re-centres = synchronise) and picks again, as often as the **part's pick retry count** allows.
+  - With retry count 0, OpenPnP would stop the job instead, so then only re-centring is done and the log says why.
+  - *Pick retries for the job's parts...* sets the retry count to 2 for the open job's parts that have 0, after confirmation (`parts.xml` on save).
   - Thresholds are in vacuum counts per nozzle tip. Default about 30 % of the free-air / covered span measured on the bench: **N045 3** (233 / 223), **N08 7** (247 / 224), other tips 3.
   - The feed hook remembers which feeder supplied each nozzle; picks without a feed on that nozzle within 60 s (manual picks) are not judged.
   - Offline-tested through OpenPnP's `Scripting.on()`; **not yet on the machine**.
@@ -208,7 +213,7 @@ tests/                  see below
 | `test_profiles.py` | `pnp-profile` on a **copy of the real `~/.openpnp2`**, judged by the real OpenPnP 2.6: byte-exact round trip; the lumen profile loads with the intended settings and nothing else changed; tuning in lumen + calibration edit → back to original equals the same edit in the original profile **byte for byte**; lumen tuning restored; hooks follow the profile; foreign hooks protected |
 | `test_tapevision.py` | Real top-camera images (white, clear, black tape): hole-geometry pocket within 0.08 mm of the detected pocket, 12 mm tape recognised, 8 mm pitch parity, presence "?" without paper |
 | `run_inspect_offline.sh` | Placement inspection with OpenPnP's OpenCV on semi-synthetic images (offset, rotation, missing, golden, polarity) + the menu script on the real job with the camera replaced (table, sort, golden, CSV) |
-| `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored); identify packet byte by byte |
+| `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored; "pick again": the exception reaches OpenPnP as `ScriptException` with retry count 2, nothing raised with retry count 0); identify packet byte by byte |
 | `run_config_compat.sh` | Install into a **copy of the real `~/.openpnp2`**: no config file changed, OpenPnP loads it the same, the journal hook runs via OpenPnP's `Scripting.on()` and never raises, uninstall is clean |
 
 ### Real machine (manual, `tests/run_bench_real_ui.sh`)

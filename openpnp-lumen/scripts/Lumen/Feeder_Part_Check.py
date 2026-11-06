@@ -35,7 +35,7 @@ from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Dimension, FlowLayout
 from java.lang import Boolean, Integer, String
-from javax.swing import (BorderFactory, JButton, JCheckBox, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
+from javax.swing import (BorderFactory, JButton, JCheckBox, JComboBox, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
                          JTable, JTextField, WindowConstants)
 from javax.swing.table import AbstractTableModel
 
@@ -154,8 +154,12 @@ class PartCheck(object):
             fld = JTextField("%.1f" % pickvac.threshold_for(pv, t), 3)
             self.pv_fields[t] = fld
             vrow.add(fld)
-        vrow.add(JLabel("counts (default ~30 % of free air - covered: N045 3, N08 7)"))
+        vrow.add(JLabel("counts (default ~30 % of free air - covered: N045 3, N08 7); then"))
+        self.pv_action = JComboBox(["log only", "re-centre at the next feed", "recycle, synchronise and pick again"])
+        self.pv_action.setSelectedIndex(list(pickvac.ACTIONS).index(pv.get("action", "recenter")))
+        vrow.add(self.pv_action)
         vrow.add(JButton("Save", actionPerformed=lambda e: self.save_pickvac()))
+        vrow.add(JButton("Pick retries for the job's parts...", actionPerformed=lambda e: self.pick_retries()))
         north.add(vrow, BorderLayout.SOUTH)
         root.add(north, BorderLayout.NORTH)
         self.table = JTable(self.model)
@@ -211,10 +215,45 @@ class PartCheck(object):
         if any(v <= 0 for v in thr.values()):
             JOptionPane.showMessageDialog(self.frame, "Thresholds must be above 0.")
             return
-        self.pv.update(enabled=bool(self.pv_on.isSelected()), threshold=thr)
+        self.pv.update(enabled=bool(self.pv_on.isSelected()), threshold=thr,
+                       action=pickvac.ACTIONS[self.pv_action.getSelectedIndex()])
         self.settings.set("pickvac", self.pv)
         self.log("pick vacuum check: %s" % self.pv)
-        self.info.setText("pick vacuum check %s, thresholds %s" % ("ON" if self.pv["enabled"] else "off", thr))
+        self.info.setText("pick vacuum check %s, thresholds %s, action %s" % ("ON" if self.pv["enabled"] else "off", thr,
+                                                                             self.pv["action"]))
+        if self.pv["enabled"] and self.pv["action"] == "repick":
+            zero = self.job_parts_without_retry()
+            if zero:
+                JOptionPane.showMessageDialog(self.frame, "'Pick again' needs the part's pick retry count >= 1.\n"
+                                              "%d part(s) of the open job have 0 (then only re-centring is done):\n%s\n\n"
+                                              "Use 'Pick retries for the job's parts...' to set them."
+                                              % (len(zero), ", ".join(sorted(str(p.getId()) for p in zero)[:12])))
+
+    def job_parts_without_retry(self):
+        from lumen import jobinfo
+        job = gui.getJobTab().getJob() if gui is not None and gui.getJobTab() is not None else None
+        parts = {}
+        if job is not None:
+            for bl, pl, placed in jobinfo.job_placements(job):
+                if pl.getPart() is not None:
+                    parts[str(pl.getPart().getId())] = pl.getPart()
+        return [p for p in parts.values() if p.getPickRetryCount() < 1]
+
+    def pick_retries(self):
+        zero = self.job_parts_without_retry()
+        if not zero:
+            JOptionPane.showMessageDialog(self.frame, "All parts of the open job have a pick retry count >= 1 (or no job is open).")
+            return
+        if JOptionPane.showConfirmDialog(self.frame, "Set the pick retry count to 2 for %d part(s) of the open job?\n%s\n\n"
+                                         "OpenPnP then discards a failed pick and picks again (also its own vacuum check).\n"
+                                         "This changes parts.xml when the configuration is saved." % (
+                                             len(zero), ", ".join(sorted(str(p.getId()) for p in zero)[:20])),
+                                         "Pick retries", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+            return
+        for p in zero:
+            p.setPickRetryCount(2)
+        self.log("pick retry count set to 2 for: %s" % sorted(str(p.getId()) for p in zero))
+        self.info.setText("pick retry count 2 set for %d part(s) - save the configuration to keep it" % len(zero))
 
     # -- one feeder: go to / identify -----------------------------------------------------
     def clicked(self):

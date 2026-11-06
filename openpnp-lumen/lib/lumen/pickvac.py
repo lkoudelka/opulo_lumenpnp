@@ -13,7 +13,17 @@ Default thresholds (counts) are ~30 % of the free-air / covered span measured on
 
 Settings ~/.openpnp2/lumen/settings.json key "pickvac":
     {"enabled": false, "threshold": {"N045": 3, "N08": 7, "*": 3}, "window": 10, "min_samples": 3,
-     "action": "recenter"}      # or "log"
+     "action": "recenter"}      # "log" | "recenter" | "repick"
+
+Actions on an edge pick:
+- log:      only the log line;
+- recenter: the next feed of that feeder runs the camera re-centring check;
+- repick:   "recycle, synchronise and pick again": re-centring is requested and the pick is made to fail
+            (RepickRequested raised from the Nozzle.AfterPick hook).  OpenPnP's job processor then
+            discards the part (discard location = recycle), feeds again (the Feeder.BeforeFeed hook runs
+            the re-centring = synchronise) and picks again - as often as the PART's "pick retry count"
+            allows.  With pick retry count 0 OpenPnP would stop the job instead, so then only "recenter"
+            is done and the log says why.
 The pure decision is assess(); the OpenPnP side is after_pick() (Nozzle.AfterPick hook).
 """
 from __future__ import absolute_import, division, print_function
@@ -23,7 +33,13 @@ import time
 
 DEFAULTS = {"enabled": False, "threshold": {"N045": 3.0, "N08": 7.0, "*": 3.0}, "window": 10, "min_samples": 3,
             "action": "recenter"}
-FEED_MAX_AGE_S = 60.0           # a pick belongs to the feeder fed on that nozzle within this time
+FEED_MAX_AGE_S = 60.0
+ACTIONS = ("log", "recenter", "repick")
+
+
+class RepickRequested(Exception):
+    """Raised from Nozzle.AfterPick to make OpenPnP discard the part and pick again."""
+    lumen_repick = True           # a pick belongs to the feeder fed on that nozzle within this time
 
 
 def median(v):
@@ -117,9 +133,22 @@ def after_pick(machine, nozzle, part):
     _set(hkey, json.dumps(update_history(history, level, flagged, st.get("window", 10))))
     from lumen import feedwatch
     msg = "%s on %s (%s): pick vacuum %s" % (feed["name"], nozzle.getName(), tip, why)
+    out = {"level": level, "typical": typical, "flagged": flagged, "why": why, "feeder": feed["feeder"], "action": None}
     if flagged:
-        if st.get("action", "recenter") == "recenter":
+        action = st.get("action", "recenter")
+        if action == "repick":
+            retries = part.getPickRetryCount() if part is not None else 0
+            if retries < 1:
+                action = "recenter"
+                msg += " (pick again needs the part's pick retry count >= 1, it is 0: only re-centring)"
+        if action in ("recenter", "repick"):
             _set("lumen.feedwatch.force." + feed["feeder"], "1")
+        if action == "recenter":
             msg += " -> re-centring check at the next feed"
+        out["action"] = action
+        if action == "repick":
+            msg += " -> RECYCLE (discard), synchronise (re-centre) and pick again"
+            feedwatch._log("PICKVAC " + msg)
+            raise RepickRequested("Lumen pick vacuum check: %s" % msg)
         feedwatch._log("PICKVAC " + msg)
-    return {"level": level, "typical": typical, "flagged": flagged, "why": why, "feeder": feed["feeder"]}
+    return out
