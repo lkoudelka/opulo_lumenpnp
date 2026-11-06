@@ -168,6 +168,44 @@ def run_verify(addr):
     check("feeder %d moved 4 mm forward: %s (%.1f s)" % (addr, res, time.time() - t0), res == "OK")
 
 
+def look(name, x, y, z, out_dir=None):
+    """Move the TOP camera to (x, y) at safe Z (view plane z for 3D units per pixel), capture, save
+    PNG + JSON sidecar {camera location, mm per pixel, size}.  Returns (path, meta)."""
+    import json
+    from org.openpnp.model import LengthUnit, Location
+    from org.openpnp.util import MovableUtils
+    from javax.imageio import ImageIO
+    cam = machine.getDefaultHead().getDefaultCamera()
+    from lumen import oppnp
+    oppnp.run_machine_task(machine, lambda: MovableUtils.moveToLocationAtSafeZ(cam, Location(LengthUnit.Millimeters, x, y, z, 0)))
+    img = cam.settleAndCapture()
+    loc = cam.getLocation().convertToUnits(LengthUnit.Millimeters)
+    from org.openpnp.model import Length
+    upp = cam.getUnitsPerPixel(Length(z, LengthUnit.Millimeters)).convertToUnits(LengthUnit.Millimeters)
+    d = out_dir or os.path.dirname(trace_path)
+    path = os.path.join(d, "look-%s-%s.png" % (name, time.strftime("%H%M%S")))
+    ImageIO.write(img, "png", File(path))
+    meta = {"name": name, "camera": [loc.getX(), loc.getY(), loc.getZ()], "upp": [upp.getX(), upp.getY()],
+            "size": [img.getWidth(), img.getHeight()], "requested": [x, y, z]}
+    open(path[:-4] + ".json", "w").write(json.dumps(meta))
+    say("  look %s: camera at %.3f/%.3f z %.2f, %.5f mm/px -> %s" % (name, loc.getX(), loc.getY(), loc.getZ(), upp.getX(), path))
+    return path, meta
+
+
+def run_exec(snippet):
+    """Home (visual homing of the configuration), then run a reviewed snippet with machine helpers."""
+    from lumen import oppnp
+    say("homing")
+    t0 = time.time()
+    oppnp.run_machine_task(machine, lambda: machine.home())
+    check("homed in %.1f s" % (time.time() - t0), machine.isHomed())
+    g = {"machine": machine, "say": say, "check": check, "look": look, "oppnp": oppnp, "time": time, "os": os,
+         "trace_path": trace_path, "args": args[1:], "load_script": load_script, "wait_idle": wait_idle,
+         "FakeOptionPane": FakeOptionPane}
+    say("running %s" % snippet)
+    _exec(compile(open(snippet).read(), snippet, "exec"), g)
+
+
 def run_preflight(addr, uuid):
     """Test job with one part on Photon feeder ADDR (sandbox config only), Preflight, camera image."""
     global gui
@@ -238,14 +276,14 @@ def run_preflight(addr, uuid):
 
 
 say("connecting OpenPnP to the machine (%s)" % ("verify mode: motion ALLOWED (homing, camera moves, one 4 mm feed)"
-    if mode == "verify" else "HOME allowed, MOVE blocked" if mode == "preflight" else "HOME and MOVE blocked"))
+    if mode in ("verify", "exec") else "HOME allowed, MOVE blocked" if mode == "preflight" else "HOME and MOVE blocked"))
 t0 = time.time()
 machine.setEnabled(True)
 check("machine enabled (driver connected)", machine.isEnabled(), "%.1f s" % (time.time() - t0))
 try:
     g, cls = load_script("Feeder_Firmware_Update.py")
     d = g[cls]()
-    if mode in ("preflight", "verify"):
+    if mode in ("preflight", "verify", "exec"):
         d.last_addr.setValue(1)
     check("Feeder Firmware Update dialog opened", d.frame.visible)
     if mode == "scan":
@@ -287,6 +325,8 @@ try:
         run_preflight(int(args[0]), args[1])
     if mode == "verify":
         run_verify(int(args[0]))
+    if mode == "exec":
+        run_exec(args[0])
 finally:
     machine.setEnabled(False)
     say("machine disabled (driver disconnected)")

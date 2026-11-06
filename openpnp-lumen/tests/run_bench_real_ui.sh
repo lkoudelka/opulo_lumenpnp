@@ -4,6 +4,7 @@
 #   tests/run_bench_real_ui.sh scan [LAST]
 #   tests/run_bench_real_ui.sh update IMAGE.bin ADDR
 #   tests/run_bench_real_ui.sh preflight ADDR UUID     (HOMES the machine: only HOME allowed, MOVE stays blocked)
+#   tests/run_bench_real_ui.sh exec SNIPPET.py [ARGS]   (MOVES: homing, then the reviewed snippet)
 #   tests/run_bench_real_ui.sh verify ADDR             (MOVES: homing incl. visual homing, camera images, ONE 4 mm feed)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -20,11 +21,11 @@ import re, sys
 p = sys.argv[1]
 s = open(p).read()
 n = 0
-for t in {"preflight": ("MOVE_TO_COMMAND",), "verify": ()}.get(sys.argv[2], ("HOME_COMMAND", "MOVE_TO_COMMAND")):
+for t in {"preflight": ("MOVE_TO_COMMAND",), "verify": (), "exec": ()}.get(sys.argv[2], ("HOME_COMMAND", "MOVE_TO_COMMAND")):
     s, k = re.subn(r'(<command type="%s">)(.*?)(</command>)' % t,
                    lambda m: m.group(1) + "<text><![CDATA[M118 LUMEN-BENCH-BLOCKED-%s]]></text>" % t + m.group(3), s, flags=re.S)
     n += k
-assert n >= 1 or sys.argv[2] == "verify", "HOME/MOVE commands not found"
+assert n >= 1 or sys.argv[2] in ("verify", "exec"), "HOME/MOVE commands not found"
 open(p, "w").write(s)
 print("configuration copy: %d motion command(s) replaced by M118 echo" % n)
 PY
