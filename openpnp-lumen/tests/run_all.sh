@@ -5,13 +5,13 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 REL=${1:?usage: run_all.sh RELEASE.bin}
 RC=0
-for t in "test_photon_sim.py" "test_learning.py" "test_orientation.py" "test_tapevision.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" \
-         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_config_compat.sh" "test_profiles.py"; do
+for t in "test_photon_sim.py" "test_learning.py" "test_orientation.py" "test_tapevision.py" "test_pickvac.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" \
+         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_pickvac_offline.sh" "run_config_compat.sh" "test_profiles.py"; do
     echo "=== $t"
     case $t in
-        test_learning.py|test_profiles.py|test_orientation.py|test_tapevision.py) ${PY:-python3} "$HERE/$t" ;;
+        test_learning.py|test_profiles.py|test_orientation.py|test_tapevision.py|test_pickvac.py) ${PY:-python3} "$HERE/$t" ;;
         *.py) ${PY:-python3} "$HERE/$t" "$REL" ;;
-        run_openpnp_headless.sh|run_config_compat.sh|run_orientation_headless.sh|run_inspect_offline.sh) "$HERE/$t" ;;
+        run_openpnp_headless.sh|run_config_compat.sh|run_orientation_headless.sh|run_inspect_offline.sh|run_pickvac_offline.sh) "$HERE/$t" ;;
         *) "$HERE/$t" "$REL" ;;
     esac > "${TMPDIR:-/tmp}/lumen-test.out" 2>&1 || RC=1
     grep -E "\[FAIL\]|checks passed|SMOKE|\[PASS\] (installer|uninstall)" "${TMPDIR:-/tmp}/lumen-test.out"

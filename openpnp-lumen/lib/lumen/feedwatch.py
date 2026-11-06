@@ -88,17 +88,28 @@ def _disable(hwid):
     os.rename(tmp, p)
 
 
-def before_feed(machine, feeder):
+def before_feed(machine, feeder, nozzle=None):
     hwid = str(feeder.getHardwareId()).upper() if hasattr(feeder, "getHardwareId") and feeder.getHardwareId() else None
     if hwid is None:
         return None
+    if nozzle is not None:
+        try:
+            from lumen import pickvac
+            pickvac.remember_feed(nozzle, feeder)       # which feeder supplies this nozzle's pick (no motion)
+        except Exception:
+            pass
+    from java.lang import System
+    forced = System.getProperty("lumen.feedwatch.force." + hwid) == "1"   # set by the pick vacuum check
     st = load_settings()
-    if hwid not in [str(x).upper() for x in st["feeders"]]:
+    if not forced and hwid not in [str(x).upper() for x in st["feeders"]]:
         return None
     n = _count(hwid)
     every = max(1, int(st.get("every", 5)))
-    if (n - 1) % every:
+    if not forced and (n - 1) % every:
         return None
+    if forced:
+        System.clearProperty("lumen.feedwatch.force." + hwid)
+        _log("%s feed %d: re-centring check requested by the pick vacuum check" % (feeder.getName(), n))
     from lumen import feedercheck
     save = os.path.join(config_dir(), "lumen", "feeder-check") if st.get("save_images") else None
     res = feedercheck.check_feeder(machine, feeder, save)

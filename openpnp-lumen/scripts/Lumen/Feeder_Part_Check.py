@@ -8,6 +8,10 @@
 # "While feeding": the same check runs during the job every N feeds of the ticked feeders
 # (Events/Feeder.BeforeFeed): skip the feed if a part is at pick, centre the pick location
 # (optionally after confirmation).  Columns sort by clicking the header.
+# "Pick vacuum check" (Events/Nozzle.AfterPick): after each pick the vacuum level is compared with the
+# feeder's typical good pick; clearly closer to free air (edge pick) -> the next feed of that feeder
+# runs the camera re-centring check.  Thresholds per nozzle tip in vacuum counts.
+# "Go to pick location" moves the top camera over the clicked feeder; "Identify" blinks its LED.
 from __future__ import absolute_import, division, print_function
 
 import os
@@ -20,11 +24,13 @@ import lumen.oppnp
 import lumen.tapevision
 import lumen.feedercheck
 import lumen.feedwatch
+import lumen.pickvac
 reload(lumen.oppnp)
 reload(lumen.tapevision)
 reload(lumen.feedercheck)
 reload(lumen.feedwatch)
-from lumen import feedercheck, feedwatch, oppnp
+reload(lumen.pickvac)
+from lumen import feedercheck, feedwatch, oppnp, pickvac
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Dimension, FlowLayout
@@ -133,7 +139,24 @@ class PartCheck(object):
         self.maxmm = JTextField("%.2f" % fw["max_mm"], 4)
         opts.add(self.maxmm)
         opts.add(JButton("Save options", actionPerformed=lambda e: self.save_options()))
-        north.add(opts, BorderLayout.SOUTH)
+        north.add(opts, BorderLayout.CENTER)
+        pv = dict(pickvac.DEFAULTS)
+        pv.update(self.settings.get("pickvac", {}) or {})
+        self.pv = pv
+        vrow = JPanel(FlowLayout(FlowLayout.LEFT))
+        self.pv_on = JCheckBox("Pick vacuum check: re-centre a feeder when its pick vacuum is closer to free air than usual by",
+                               bool(pv["enabled"]))
+        vrow.add(self.pv_on)
+        self.pv_fields = {}
+        tips = sorted(set([str(t.getName()) for t in machine.getNozzleTips()] + [k for k in pv["threshold"] if k != "*"]))
+        for t in tips + ["*"]:
+            vrow.add(JLabel(t if t != "*" else "other tips"))
+            fld = JTextField("%.1f" % pickvac.threshold_for(pv, t), 3)
+            self.pv_fields[t] = fld
+            vrow.add(fld)
+        vrow.add(JLabel("counts (default ~30 % of free air - covered: N045 3, N08 7)"))
+        vrow.add(JButton("Save", actionPerformed=lambda e: self.save_pickvac()))
+        north.add(vrow, BorderLayout.SOUTH)
         root.add(north, BorderLayout.NORTH)
         self.table = JTable(self.model)
         self.table.setAutoCreateRowSorter(True)
@@ -148,6 +171,8 @@ class PartCheck(object):
         b.add(JButton("Select none", actionPerformed=lambda e: self.select(lambda x: False)))
         b.add(self.check_btn)
         b.add(JButton("Apply offset to selected", actionPerformed=lambda e: self.apply()))
+        b.add(JButton("Go to pick location", actionPerformed=lambda e: self.go_to()))
+        b.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.identify()))
         b.add(JButton("Close", actionPerformed=lambda e: fr.dispose()))
         root.add(b, BorderLayout.SOUTH)
         fr.setContentPane(root)
@@ -176,6 +201,55 @@ class PartCheck(object):
         self.log("options: %s" % self.fw)
         if not quiet:
             self.info.setText("options saved: %d feeder(s) checked while feeding, every %d feeds" % (len(self.watch), every))
+
+    def save_pickvac(self):
+        try:
+            thr = dict((t, float(f.getText())) for t, f in self.pv_fields.items())
+        except ValueError:
+            JOptionPane.showMessageDialog(self.frame, "Thresholds must be numbers (vacuum counts).")
+            return
+        if any(v <= 0 for v in thr.values()):
+            JOptionPane.showMessageDialog(self.frame, "Thresholds must be above 0.")
+            return
+        self.pv.update(enabled=bool(self.pv_on.isSelected()), threshold=thr)
+        self.settings.set("pickvac", self.pv)
+        self.log("pick vacuum check: %s" % self.pv)
+        self.info.setText("pick vacuum check %s, thresholds %s" % ("ON" if self.pv["enabled"] else "off", thr))
+
+    # -- one feeder: go to / identify -----------------------------------------------------
+    def clicked(self):
+        i = self.table.getSelectedRow()
+        if i < 0:
+            JOptionPane.showMessageDialog(self.frame, "Click a feeder row first.")
+            return None
+        return self.model.rows[self.table.convertRowIndexToModel(i)]
+
+    def go_to(self):
+        x = self.clicked()
+        if x is None or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move"):
+            return
+
+        def work():
+            try:
+                pick = oppnp.run_machine_task(machine, lambda: feedercheck.go_to(machine, x["feeder"]))
+                oppnp.on_ui(lambda: self.info.setText("camera at the pick location of %s: %.3f / %.3f" % (
+                    x["feeder"].getName(), pick.getX(), pick.getY())))
+            except (Exception, JavaException) as e:
+                oppnp.on_ui(lambda: self.info.setText("go to failed: %s" % e))
+        oppnp.in_background(work)
+
+    def identify(self):
+        x = self.clicked()
+        if x is None or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot identify"):
+            return
+
+        def work():
+            try:
+                addr = oppnp.run_machine_task(machine, lambda: feedercheck.identify(machine, x["feeder"]))
+                oppnp.on_ui(lambda: self.info.setText("%s (address %d) is blinking" % (x["feeder"].getName(), addr)))
+            except (Exception, JavaException) as e:
+                oppnp.on_ui(lambda: self.info.setText("identify failed: %s" % e))
+        oppnp.in_background(work)
 
     # -- check --------------------------------------------------------------------------
     def select(self, pred):
