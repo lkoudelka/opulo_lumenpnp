@@ -15,8 +15,12 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.zprobe
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.zprobe)
 from lumen import oppnp, zprobe
 from lumen.oppnp import JavaException
@@ -104,7 +108,7 @@ class BoardZ(object):
         b.add(JButton("Apply mean Z to board(s)", actionPerformed=lambda e: self.apply()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(root)
+        f.setContentPane(lumen.uihelp.wrap(root, "board_z"))
         f.pack()
         f.setLocationRelativeTo(gui)
         f.setVisible(True)

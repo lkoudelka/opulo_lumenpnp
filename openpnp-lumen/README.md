@@ -17,6 +17,12 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 | **Placement Inspection** | Top camera over the job's placed parts: body found / offset / rotation (size from the package), golden-sample comparison incl. 180° (polarity) check; images per run, CSV report. Sortable. | §2 | Camera only |
 | **Preflight** | One-click checklist from `~/.openpnp2/lumen/preflight.json`: machine enabled, job open, home (if needed), lights, nozzle tips, vacuum sensors, job readiness, job feeders answer on the bus (and minimum firmware). PASS / WARN / FAIL. | §4 | Homing (if enabled and needed), lights |
 
+**Help inside every tool:**
+- **"▸ Help" at the top of each window** unfolds a short description: what the tool does, the steps, what moves the machine, and every option and column.
+- **Tooltips:** every option, button and input field has one (one or two concrete sentences, with defaults and units); table column headers have tooltips too.
+- **Source:** all texts are in `lib/lumen/helptext.py` (one place, easy to correct).
+- **Test:** `tests/run_help_offline.sh` opens every tool and fails if any control or column has no description.
+
 **Feeder Firmware Update details:**
 - **Guards:**
   - The machine must be enabled.
@@ -201,6 +207,7 @@ lib/lumen/journal.py    placement journal
 lib/lumen/orientation.py  pin-1 marks, verified .kicad_pcb / Gerber import, footprint table
 lib/lumen/tapevision.py tape analysis: sprocket holes, EIA pocket centre, pockets / parts (paper)
 lib/lumen/feedercheck.py, feedwatch.py   Feeder Part Check and the Feeder.BeforeFeed centring
+lib/lumen/helptext.py, uihelp.py   in-tool help texts, folding help panel, tooltips
 lib/lumen/pickvac.py    pick vacuum check (edge pick -> re-centre), Nozzle.AfterPick
 lib/lumen/zprobe.py     vacuum contact probing (Board Z Probe)
 lib/lumen/nozzlecal.py  target carry + OpenPnP nozzle offset calibration
@@ -226,6 +233,7 @@ tests/                  see below
 | `test_tapevision.py` | Real top-camera images (white, clear, black tape): hole-geometry pocket within 0.08 mm of the detected pocket, 12 mm tape recognised, 8 mm pitch parity, presence "?" without paper |
 | `run_inspect_offline.sh` | Placement inspection with OpenPnP's OpenCV on semi-synthetic images (offset, rotation, missing, golden, polarity) + the menu script on the real job with the camera replaced (table, sort, golden, CSV) |
 | `test_pickvac.py`, `run_pickvac_offline.sh` | Pick vacuum decision (learning, edge pick, per-tip thresholds, own typical per feeder); the hooks through OpenPnP's `Scripting.on()` on a copy of the real config without a machine (re-centre request, forced check once, disabled, manual picks ignored; return to feeder with Photon SkipNext, fallbacks to discard when the take-back is impossible or fails, "feed the next part" off = exactly 1 + feed-retry-count refused feeds (also through `Scripting.on`), then clear, stale block ignored, discard, retry count 0 = re-centre only; the exception reaches OpenPnP as `ScriptException`); identify packet byte by byte |
+| `run_help_offline.sh` | Every tool opened on a copy of the real config with the test job, no machine: every button / checkbox / input / column has a description, the help panel opens and closes, windows rendered to PNG |
 | `run_config_compat.sh` | Install into a **copy of the real `~/.openpnp2`**: no config file changed, OpenPnP loads it the same, the journal hook runs via OpenPnP's `Scripting.on()` and never raises, uninstall is clean |
 
 ### Real machine (manual, `tests/run_bench_real_ui.sh`)

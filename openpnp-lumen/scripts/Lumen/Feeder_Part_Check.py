@@ -21,11 +21,15 @@ _LIB = os.path.join(str(scripting.getScriptsDirectory().getParent()), "lumen", "
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 import lumen.oppnp
+import lumen.helptext
+import lumen.uihelp
 import lumen.tapevision
 import lumen.feedercheck
 import lumen.feedwatch
 import lumen.pickvac
 reload(lumen.oppnp)
+reload(lumen.helptext)
+reload(lumen.uihelp)
 reload(lumen.tapevision)
 reload(lumen.feedercheck)
 reload(lumen.feedwatch)
@@ -124,16 +128,16 @@ class PartCheck(object):
         root = JPanel(BorderLayout(6, 6))
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
         north = JPanel(BorderLayout())
-        self.info = JLabel("Tick feeders and press Check. The top camera visits each pick location; no feed, no pick.")
+        self.info = JLabel("Tick feeders and press Check selected (camera only). Help above explains every option.")
         north.add(self.info, BorderLayout.NORTH)
         opts = JPanel(FlowLayout(FlowLayout.LEFT))
-        opts.add(JLabel("While feeding (ticked feeders): check every"))
+        opts.add(JLabel("While feeding: check every"))
         self.every = JTextField(str(fw["every"]), 3)
         opts.add(self.every)
         opts.add(JLabel("feeds;"))
-        self.confirm = JCheckBox("confirm before moving the pick location", bool(fw["confirm"]))
+        self.confirm = JCheckBox("confirm moves", bool(fw["confirm"]))
         opts.add(self.confirm)
-        self.skip = JCheckBox("skip the feed if a part is at pick", bool(fw["skip_if_part"]))
+        self.skip = JCheckBox("skip feed if part at pick", bool(fw["skip_if_part"]))
         opts.add(self.skip)
         opts.add(JLabel("max correction mm"))
         self.maxmm = JTextField("%.2f" % fw["max_mm"], 4)
@@ -144,7 +148,7 @@ class PartCheck(object):
         pv.update(self.settings.get("pickvac", {}) or {})
         self.pv = pv
         vrow = JPanel(FlowLayout(FlowLayout.LEFT))
-        self.pv_on = JCheckBox("Pick vacuum check: re-centre a feeder when its pick vacuum is closer to free air than usual by",
+        self.pv_on = JCheckBox("Pick vacuum check, threshold (counts):",
                                bool(pv["enabled"]))
         vrow.add(self.pv_on)
         self.pv_fields = {}
@@ -154,18 +158,17 @@ class PartCheck(object):
             fld = JTextField("%.1f" % pickvac.threshold_for(pv, t), 3)
             self.pv_fields[t] = fld
             vrow.add(fld)
-        vrow.add(JLabel("counts (default ~30 % of free air - covered: N045 3, N08 7); then"))
-        self.pv_action = JComboBox(["log only", "re-centre at the next feed",
-                                    "return to feeder, synchronise and pick again (recycle)",
-                                    "discard, synchronise and pick again (part wasted)"])
+        vrow.add(JLabel("action:"))
+        self.pv_action = JComboBox(["log only", "re-centre at next feed", "return to feeder + pick again",
+                                    "discard + pick again"])
         act = {"repick": "discard"}.get(pv.get("action", "recenter"), pv.get("action", "recenter"))
         self.pv_action.setSelectedIndex(list(pickvac.ACTIONS).index(act) if act in pickvac.ACTIONS else 1)
         vrow.add(self.pv_action)
-        self.pv_feed_next = JCheckBox("if the return fails: discard and feed the next part (off: stop the job)",
+        self.pv_feed_next = JCheckBox("return fails: feed next part",
                                       bool(pv.get("fallback_feed_next", False)))
         vrow.add(self.pv_feed_next)
         vrow.add(JButton("Save", actionPerformed=lambda e: self.save_pickvac()))
-        vrow.add(JButton("Pick retries for the job's parts...", actionPerformed=lambda e: self.pick_retries()))
+        vrow.add(JButton("Pick retries...", actionPerformed=lambda e: self.pick_retries()))
         north.add(vrow, BorderLayout.SOUTH)
         root.add(north, BorderLayout.NORTH)
         self.table = JTable(self.model)
@@ -185,7 +188,7 @@ class PartCheck(object):
         b.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.identify()))
         b.add(JButton("Close", actionPerformed=lambda e: fr.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        fr.setContentPane(root)
+        fr.setContentPane(lumen.uihelp.wrap(root, "part_check"))
         fr.pack()
         fr.setLocationRelativeTo(gui)
         fr.setVisible(True)
