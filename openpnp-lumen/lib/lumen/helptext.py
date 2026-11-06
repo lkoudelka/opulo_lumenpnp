@@ -20,70 +20,93 @@ HELP["part_check"] = {
 <p>Checks Photon feeders with the <b>top camera</b>. The pocket centre comes from the tape's
 <b>sprocket holes</b> (EIA tape geometry), so it works on paper, clear and black tape and for any part.
 Whether a part sits in the pick pocket is detected on <b>white paper tape</b> only ("?" otherwise).</p>
+<p><b>Tab Check</b></p>
 <ol>
 <li><b>Check now:</b> tick feeders, <i>Check selected</i>. Result per feeder: part at pick, how far the pick
 location is from the pocket centre. A part already at pick sets OpenPnP's <i>Skip next feed</i>.</li>
 <li><b>Correct:</b> <i>Apply offset to selected</i> moves the pick location onto the pocket centre (max 2 mm,
 read back, logged).</li>
-<li><b>While feeding</b> (during the job): tick the column, set the options of the first row, <i>Save options</i>.
-Every N-th feed the camera checks the feeder before it feeds: part at pick -> the feed is skipped;
-pick off-centre by 0.05 mm ... max -> moved onto the centre (with a question if <i>confirm</i> is ticked).</li>
-<li><b>Pick vacuum check</b> (during the job, off by default): after each pick the vacuum is read with the part held.
-An off-centre (edge) pick seals worse, so the level is closer to free air than this feeder's usual pick.
-Then the chosen action runs (see the drop-down).</li>
 </ol>
-<p><b>Actions after an edge pick:</b> <i>log only</i>; <i>re-centre at the next feed</i>;
-<i>return to feeder, synchronise and pick again</i> (the part goes back into its pocket, the pick location is
-re-centred, the same part is picked again - nothing wasted); <i>discard, synchronise and pick again</i> (part wasted).
+<p><b>Tab Options per feeder</b> - what happens <b>during the job</b>, set <b>per feeder</b> (feeders behave differently
+with different parts / tapes):</p>
+<ol>
+<li><b>Defaults</b> (top): used by every feeder that has no own value. <i>Save defaults</i> stores them.</li>
+<li><b>Table</b>: one row per feeder with the values it really uses. <span style='color:gray'><i>Grey / italic</i></span>
+= the default; black = the feeder's own value. Edit a cell to give the feeder its own value. Highlight several rows
+(Shift / Ctrl + click) and edit one of them: the value is set for all highlighted rows.
+<i>Reset highlighted to defaults</i> removes the own values (the <i>While feeding</i> tick stays).</li>
+<li><b>While feeding</b>: every N-th feed of that feeder the camera checks it before it feeds: part at pick -> the
+feed is skipped; pick off-centre by 0.05 mm ... max -> moved onto the centre (with a question if <i>Confirm</i>).</li>
+<li><b>Vac check</b> (pick vacuum check, off by default): after each pick the vacuum is read with the part held.
+An off-centre (edge) pick seals worse, so the level is closer to free air than this feeder's usual pick.
+Then the feeder's <i>Edge pick action</i> runs.</li>
+</ol>
+<p><b>Edge pick actions:</b> <i>log only</i>; <i>re-centre at the next feed</i>;
+<i>return to feeder + pick again</i> (the part goes back into its pocket, the pick location is
+re-centred, the same part is picked again - nothing wasted); <i>discard + pick again</i> (part wasted).
 Returning / discarding uses OpenPnP's retry: the part's <b>pick retry count must be 1 or more</b>, otherwise
 only re-centring is done.</p>
+<p>Options follow the <b>feeder</b> (its hardware id), not the slot or the part: after loading another reel, check
+the feeder's row. Stored in ~/.openpnp2/lumen/settings.json (defaults: feedwatch, pickvac; own values: feeder_options).</p>
 <p>Logs: ~/.openpnp2/lumen/logs/ (feeder-part-check-*, feedwatch-*). Images: ~/.openpnp2/lumen/feeder-check/.</p>
 """ + MOVES % "Check, Go to and the checks while feeding move the <b>top camera</b> only (safe Z). Identify only blinks the LED. "
-      "Return to feeder moves the nozzle back to the feeder and places the part.",
+      "Return to feeder moves the nozzle back to the feeder and places the part. Editing options moves nothing.",
+    "tabs": {
+        "Check": "Check feeders now with the camera; apply the pick offset.",
+        "Options per feeder": "What happens during the job, per feeder: centring while feeding, pick vacuum check, edge "
+                              "pick action. Defaults on top, own values per feeder in the table.",
+    },
     "tips": {
         "Tick feeders and press Check selected": "Status line: what is running and the last result.",
-        "While feeding: check every": "Every N-th feed of a feeder ticked 'While feeding' the camera checks it "
-                                                     "before the feed. 1 = every feed (slowest), 5 = default. Each check adds ~1-2 s.",
-        "feeds;": "Number of feeds between two checks while feeding.",
-        "confirm moves": "On: a question (Apply / Skip / Stop for this feeder) pauses the job before "
-                                                   "the pick location is moved. Off: moved automatically within 'max correction'.",
-        "skip feed if part at pick": "On: if the camera sees a part already in the pick pocket, OpenPnP's next feed is "
-                                              "skipped (paper tape only; on clear/black tape presence is not detected).",
-        "max correction mm": "Largest automatic move of the pick location while feeding (default 0.50 mm). Larger offsets are "
-                             "only logged - check the feeder by hand.",
-        "Save options": "Store the 'while feeding' options and the ticked feeders (settings.json, key feedwatch).",
-        "Pick vacuum check": "On (off by default): after each pick from a Photon feeder the vacuum is compared with this feeder's usual good pick "
-                             "(median of its last 10). Clearly closer to free air = edge pick -> the action from the drop-down.",
+        "Defaults": "Values for feeders without an own value.",
+        "While feeding: check every": "Default: every N-th feed of a feeder with 'While feeding' ticked, the camera checks it "
+                                      "before the feed. 1 = every feed (slowest), 5 = default. Each check adds ~1-2 s. "
+                                      "Own value per feeder: column 'Every N'.",
+        "feeds;": "Number of feeds between two checks while feeding (default for all feeders).",
+        "confirm moves": "Default. On: a question (Apply / Skip / Stop for this feeder) pauses the job before "
+                         "the pick location is moved. Off: moved automatically within 'max correction'. Per feeder: column 'Confirm'.",
+        "skip feed if part at pick": "Default. On: if the camera sees a part already in the pick pocket, OpenPnP's next feed is "
+                                     "skipped (paper tape only; on clear/black tape presence is not detected). Per feeder: 'Skip if part'.",
+        "max correction mm": "Default largest automatic move of the pick location while feeding (0.50 mm; 0.05 ... 2). Larger "
+                             "offsets are only logged - check the feeder by hand. Per feeder: 'Max mm'.",
+        "Pick vacuum check": "Default on/off (off by default): after each pick from a Photon feeder the vacuum is compared with "
+                             "this feeder's usual good pick (median of its last 10). Clearly closer to free air = edge pick -> "
+                             "the edge pick action. Per feeder: 'Vac check'.",
         "N045": "Threshold for the N045 tip in vacuum counts above the feeder's usual pick (bench: free air 233, covered 223 -> "
-                "default 3 = 30 % of the span). Lower = more sensitive.",
-        "N08": "Threshold for the N08 tip (bench: free air 247, covered 224 -> default 7).",
+                "default 3 = 30 % of the span). Lower = more sensitive. Used by feeders whose 'Vac threshold' is 'per tip'.",
+        "N08": "Threshold for the N08 tip (bench: free air 247, covered 224 -> default 7). Used by feeders whose 'Vac threshold' "
+               "is 'per tip'.",
         "N14": "Threshold for the N14 tip in vacuum counts (no bench value yet: use ~30 % of free air minus covered).",
         "N24": "Threshold for the N24 tip in vacuum counts (no bench value yet: use ~30 % of free air minus covered).",
         "N40": "Threshold for the N40 tip in vacuum counts (no bench value yet).",
         "N75": "Threshold for the N75 tip in vacuum counts (no bench value yet).",
         "other tips": "Threshold for tips without their own value (default 3 counts).",
-        "action:": "What happens after an edge pick: log only / re-centre at the next feed / return to feeder + pick again "
+        "action:": "Default edge pick action: log only / re-centre at the next feed / return to feeder + pick again "
                    "(the part goes back into its pocket, re-centred, the same part picked again - nothing wasted) / discard + "
-                   "pick again (part wasted). Return and discard need the part's pick retry count >= 1.",
-        "return fails: feed next part": "Only for 'return to feeder': if the feeder cannot take the part back or the put-back fails, the "
-                               "part is discarded. On: the next part is fed and picked. Off (default): the next feed is refused, "
-                               "OpenPnP disables the feeder and stops the job - check the feeder (the part may lie loose on it).",
-        "Save": "Store the pick vacuum options (settings.json, key pickvac).",
+                   "pick again (part wasted). Return and discard need the part's pick retry count >= 1. Per feeder: "
+                   "'Edge pick action'.",
+        "return fails: feed next part": "Default, only for 'return to feeder': if the feeder cannot take the part back or the "
+                                        "put-back fails, the part is discarded. On: the next part is fed and picked. Off "
+                                        "(default): the next feed is refused, OpenPnP disables the feeder and stops the job - "
+                                        "check the feeder (the part may lie loose on it). Per feeder: 'Return fails: feed next'.",
+        "Save defaults": "Store the defaults (settings.json keys feedwatch, pickvac). Feeders with own values keep them.",
         "Pick retries...": "'Return' and 'discard' need the part's pick retry count >= 1. Sets 2 for the open "
-                                            "job's parts that have 0 (after confirmation; saved with the configuration).",
+                           "job's parts that have 0 (after confirmation; saved with the configuration).",
+        "Edit a cell": "How to set options per feeder.",
+        "Reset highlighted to defaults": "The highlighted feeders lose their own values and use the defaults again "
+                                         "(the 'While feeding' tick is kept).",
         "Select all": "Tick all feeders in the list.",
         "Select none": "Untick all feeders.",
         "Check selected": "Camera to each ticked feeder's pick location: pocket centre, part at pick, offset. Part at pick -> "
                           "next feed skipped. No feed, no nozzle down.",
         "Apply offset to selected": "Move the pick location of the ticked, checked feeders onto the pocket centre "
                                     "(Photon feeder offset; max 2 mm; read back; logged).",
-        "Go to pick location": "Top camera over the pick location of the clicked row (to look at it in the camera view).",
-        "Identify (blink LED)": "The clicked feeder blinks its LED white 3 times (Photon IDENTIFY command). No motion.",
+        "Go to pick location": "Top camera over the pick location of the clicked row (either tab), to look at it in the camera view.",
+        "Identify (blink LED)": "The clicked feeder (either tab) blinks its LED white 3 times (Photon IDENTIFY command). No motion.",
         "Close": "Close the window (settings stay).",
     },
     "columns": {
         "Check": "Tick to include the feeder in Check selected / Apply offset.",
-        "While feeding": "Tick to check this feeder during the job (every N feeds, options in the first row).",
         "Feeder": "OpenPnP feeder name (hardware id and slot).",
         "Slot": "Slot address on the bus (sortable as a number).",
         "Part": "Part assigned to the feeder in OpenPnP.",
@@ -92,6 +115,20 @@ only re-centring is done.</p>
         "Pick vs pocket mm": "Offset of the pocket centre from the current pick location (X / Y). Apply offset moves the "
                              "pick location by this.",
         "Result": "OK, or what needs attention (empty pocket, off-centre, not found).",
+        "While feeding": "Tick = the camera checks this feeder during the job (every N feeds) and centres its pick location. "
+                         "Always per feeder (off unless ticked).",
+        "Every N": "Check every N-th feed of this feeder (1 = every feed). Grey = default.",
+        "Confirm": "Ask before moving this feeder's pick location (pauses the job). Grey = default.",
+        "Skip if part": "Skip the feed when a part is already in the pick pocket (paper tape). Grey = default.",
+        "Max mm": "Largest automatic correction for this feeder (0.05 ... 2 mm); larger only logged. Grey = default.",
+        "Vac check": "Pick vacuum check on for this feeder. Grey = default.",
+        "Vac threshold": "Edge pick threshold in vacuum counts for this feeder, whatever tip picks. 'per tip' = the tip "
+                         "thresholds of the defaults; type a number for an own value, clear the cell for 'per tip'.",
+        "Edge pick action": "What happens after an edge pick from this feeder: log only / re-centre at next feed / return to "
+                            "feeder + pick again / discard + pick again. Grey = default.",
+        "Return fails: feed next": "For 'return to feeder': if the return fails, ticked = feed and pick the next part; unticked "
+                                   "= refuse the next feed and stop the job for the operator. Grey = default.",
+        "Own values": "Which options this feeder has its own value for ('defaults' = none).",
     },
 }
 

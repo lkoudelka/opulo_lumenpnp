@@ -11,7 +11,9 @@ feed runs the camera re-centring check (lumen.feedwatch), with confirmation if t
 Default thresholds (counts) are ~30 % of the free-air / covered span measured on the bench
 2026-11-06: N045 free air 233-234, covered 223-224 -> 3;  N08 free 247, covered 224 -> 7.
 
-Settings ~/.openpnp2/lumen/settings.json key "pickvac":
+Options per feeder (lumen.feederopts, settings.json key "feeder_options"): on/off, threshold (counts,
+any tip; blank = the tip's threshold below), action and "fallback_feed_next" can differ per feeder;
+a feeder without an own value takes the default from key "pickvac":
     {"enabled": false, "threshold": {"N045": 3, "N08": 7, "*": 3}, "window": 10, "min_samples": 3,
      "action": "recenter"}      # "log" | "recenter" | "return" | "discard"
 
@@ -138,37 +140,42 @@ def remember_feed(nozzle, feeder):
                                                                "t": time.time()}))
 
 
-def load_settings():
-    from lumen import feedwatch
-    import os
-    p = os.path.join(feedwatch.config_dir(), "lumen", "settings.json")
-    try:
-        f = open(p)
-        try:
-            d = json.load(f)
-        finally:
-            f.close()
-    except (IOError, OSError, ValueError):
-        d = {}
+def load_settings(data=None):
+    if data is None:
+        from lumen import feedwatch
+        data = feedwatch.read_all()
     out = dict(DEFAULTS)
-    out.update(d.get("pickvac") or {})
+    out.update(data.get("pickvac") or {})
+    return out
+
+
+def feeder_settings(hwid, data=None):
+    """Defaults + this feeder's own options: enabled, feeder_threshold (None = per tip), action, fallback."""
+    from lumen import feederopts
+    if data is None:
+        from lumen import feedwatch
+        data = feedwatch.read_all()
+    out = load_settings(data)
+    e = feederopts.effective(data, hwid)
+    out.update(enabled=e["pickvac"], feeder_threshold=e["threshold"], action=e["action"],
+               fallback_feed_next=e["fallback_feed_next"])
     return out
 
 
 def after_pick(machine, nozzle, part):
     """Nozzle.AfterPick: read the vacuum level with the part held, compare with the feeder's typical."""
-    st = load_settings()
-    if not st.get("enabled"):
-        return None
     raw = _prop("lumen.lastfeed." + str(nozzle.getId()))
     if not raw:
         return None
     feed = json.loads(raw)
     if time.time() - feed["t"] > FEED_MAX_AGE_S or (part is not None and feed.get("part") and feed["part"] != str(part.getId())):
         return None                                       # manual pick or another part: not ours to judge
+    st = feeder_settings(feed["feeder"])
+    if not st.get("enabled"):
+        return None
     level = float(nozzle.readVacuumLevel())
     tip = nozzle.getNozzleTip().getName() if nozzle.getNozzleTip() is not None else "*"
-    thr = threshold_for(st, tip)
+    thr = float(st["feeder_threshold"]) if st.get("feeder_threshold") else threshold_for(st, tip)
     hkey = "lumen.pickvac.history.%s.%s" % (feed["feeder"], tip)
     history = json.loads(_prop(hkey, "[]"))
     flagged, typical, why = assess(history, level, thr, int(st.get("min_samples", 3)))
