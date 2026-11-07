@@ -368,7 +368,8 @@ which source / not detected and why) and saves it to ~/.openpnp2/lumen/logs/.</p
 <p>Every mark is confirmed in the two squares (<i>Check selected</i>). Nothing is changed on the feeder without
 <i>Confirm and apply</i>.</p>
 <p><b>Still in doubt?</b> <i>Test placement on the PCB</i> puts one part on its real pads (board without paste), you mark
-pin 1 in the photo, and the part goes back into its feeder (nothing wasted).</p>
+pin 1 in the photo, and the part goes back into its feeder (nothing wasted). Meant for the bigger, polarised parts (ICs,
+diodes, LEDs, electrolytics); parts marked "orientation not relevant" are skipped.</p>
 """ + MOVES % ("<i>Show top camera at the feeder</i> moves the camera; <i>Test placement on the PCB</i> feeds, picks, "
                 "places and picks up again (only after its own confirmation)."),
     "tips": {
@@ -382,7 +383,8 @@ pin 1 in the photo, and the part goes back into its feeder (nothing wasted).</p>
         "Check selected (two squares)": "Open the two squares for the selected row: click pin 1 in the feeder and in CAD.",
         "Test placement on the PCB": "For the selected row(s) you are not sure about: place one part on its real pads (board "
                                      "WITHOUT solder paste), photograph it, mark pin 1 in the photo, then the part is picked up "
-                                     "again and recycled into its feeder. Several rows: one window after the other.",
+                                     "again and recycled into its feeder. Several rows: one window after the other. Rows marked "
+                                     "'orientation not relevant' are skipped.",
         "Toggle 'orientation matters'": "Override the automatic decision for the selected part.",
         "Refresh": "Re-read the job, feeders and sources.",
         "Close": "Close the window.",
@@ -413,7 +415,7 @@ HELP["orientation_check"] = {
 HELP["orientation_test"] = {
     "title": "Test placement - the part on its real pads, pin 1 marked in the photo, then recycled",
     "html": """
-<p>For a part you are not sure about: <b>one</b> part is fed, picked, aligned (bottom vision, as in the job) and placed on
+<p>For a part you are not sure about (mostly bigger, polarised parts: ICs, diodes, LEDs, electrolytics): <b>one</b> part is fed, picked, aligned (bottom vision, as in the job) and placed on
 its real pads, then photographed with the top camera. <b>The board must have NO solder paste</b> on these pads (bare or test
 board): the part is picked up again afterwards.</p>
 <p>In the photo: the <b>red dot</b> = pin 1 of the <b>part</b> (click it; preset only when a golden sample of the package

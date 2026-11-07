@@ -158,6 +158,24 @@ def placement_choices(cands):
     return 0
 
 
+def split_rows(rows):
+    """Selected rows -> (to test, skipped): parts marked 'orientation not relevant' are not worth a test."""
+    keep = [r for r in rows if r.get("matters") is not False]
+    return keep, [r for r in rows if r.get("matters") is False]
+
+
+def view_check(length, width, upp, w_px, h_px):
+    """None when the body fits the square photo crop (short side of the camera image), else a warning."""
+    if not length or not upp:
+        return None
+    view = min(w_px, h_px) * upp
+    size = max(length, width or 0.0)
+    if size <= 0.9 * view:
+        return None
+    return ("The part (%.1f mm) is about as big as the camera view (%.1f mm): pin 1 may be outside the photo, "
+            "check it in the camera view of OpenPnP" % (size, view))
+
+
 # ---------------------------------------------------------------------------------------
 # OpenPnP side (Jython, inside a machine task)
 # ---------------------------------------------------------------------------------------
@@ -356,6 +374,7 @@ def photo(machine, bl, pl, st, golden_root=None, save_dir=None):
             res["golden_error"] = str(e)
     res["proposal"], res["proposal_why"] = propose_turn(res.get("golden_turns"))
     res["axis_rot"], res["length"], res["width"] = axis, length, width
+    res["view_warning"] = view_check(length, width, upp, img.getWidth(), img.getHeight())
     crop_mm = max(2.0, 3.0 * (length or 1.0))
     s = int(min(crop_mm / upp, img.getWidth(), img.getHeight()))
     res["crop_mm"] = s * upp
