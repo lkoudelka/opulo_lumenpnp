@@ -74,6 +74,14 @@ m1 = ins.match_golden(img("asym_ok"), upp, ga, 0.0)
 m2 = ins.match_golden(img("asym_180"), upp, ga, 0.0)
 check("asymmetric part correct: no polarity suspicion", not m1["polarity_suspect"], "%.2f / 180: %.2f" % (m1["score"], m1["score180"]))
 check("asymmetric part turned 180: polarity suspected", m2["polarity_suspect"], "%.2f / 180: %.2f" % (m2["score"], m2["score180"]))
+from lumen import testplace as tp
+t1 = ins.match_golden_turns(img("asym_ok"), upp, ga, 0.0)
+t2 = ins.match_golden_turns(img("asym_180"), upp, ga, 0.0)
+check("test placement: golden turns, correct part -> proposal 0", tp.propose_turn(t1)[0] == 0.0, tp.propose_turn(t1)[1])
+check("test placement: golden turns, part turned 180 -> proposal 180", tp.propose_turn(t2)[0] == 180.0, tp.propose_turn(t2)[1])
+t3 = ins.match_golden_turns(img("rot90"), upp, g, 90.0)
+check("test placement: golden turns at the expected 90 deg -> best turn 0 or 180 (2-pin body)",
+      max(t3, key=t3.get) in (0.0, 180.0), t3)
 check("verdict for the turned part: FAIL ... polarity", "polarity" in ins.verdict({"golden": m2, "body": ins.find_body(img("asym_180"), upp, L, W, 0.0)}),
       ins.verdict({"golden": m2}))
 res = ins.analyse(img("offset"), upp, "C_0402_1005Metric", L, W, 0.0, root)
