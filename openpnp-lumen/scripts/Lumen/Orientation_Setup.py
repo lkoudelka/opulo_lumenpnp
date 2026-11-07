@@ -519,8 +519,9 @@ class TestDialog(object):
         lines.append("Camera: " + r["proposal_why"] + ("" if r.get("proposal") is None else " - preset, check it"))
         if tp.off90(st["placement_rot"]) > 1.0:
             lines.append("Placement rotation %.1f deg is not a multiple of 90: the corners are the nearest ones" % st["placement_rot"])
-        if st.get("warning"):
-            lines.append("<font color='red'>%s</font>" % st["warning"])
+        for w in (r.get("view_warning"), st.get("warning")):
+            if w:
+                lines.append("<font color='red'>%s</font>" % w)
         lines.append("Photo: lumen/testplace/%s" % os.path.basename(r.get("image") or "-"))
         self.camera_txt.setText("<html><div style='width:230px'>%s</div></html>" % "<br><br>".join(lines))
         self.side.revalidate()
@@ -1091,9 +1092,17 @@ class OrientationSetup(object):
     def test(self):
         """Test placement of the selected rows' parts, one after the other (each in its own window)."""
         rows = [self.model.rows[i] for i in self.table.getSelectedRows() if self.model.rows[i].get("feeder") is not None]
+        rows, skipped = tp.split_rows(rows)
+        if skipped:
+            msg = ("Orientation is marked 'not relevant' for %s: no test for %s.\n(If it does matter, use "
+                   "\"Toggle 'orientation matters'\" first.)" % (", ".join(sorted(set(x["part_id"] for x in skipped))),
+                                                                  "it" if len(skipped) == 1 else "them"))
+            self.log(msg.replace("\n", " "))
+            JOptionPane.showMessageDialog(self.frame, msg)
         if not rows:
-            JOptionPane.showMessageDialog(self.frame, "Select the row(s) you are not sure about - rows with a feeder "
-                                                      "(the test part is taken from it and returned to it).")
+            if not skipped:
+                JOptionPane.showMessageDialog(self.frame, "Select the row(s) you are not sure about - rows with a feeder "
+                                                          "(the test part is taken from it and returned to it).")
             return None
         self._tests = [(x["part_id"], x["feeder"]) for x in rows[1:]]
         return TestDialog(self, rows[0], self._next_test)

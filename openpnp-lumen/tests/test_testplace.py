@@ -82,5 +82,16 @@ check("unknown feeder type -> would be DISCARDED", "DISCARDED" in tp.recycle_tex
 check("default placement: first one not placed yet", tp.placement_choices([("R1", True), ("R2", False), ("R3", False)]) == 1
       and tp.placement_choices([("R1", True)]) == 0)
 
+print("which parts (orientation matters mostly for bigger, polarised parts)")
+k, sk = tp.split_rows([{"part_id": "U1", "matters": True}, {"part_id": "R1", "matters": False}, {"part_id": "X", "matters": None}])
+check("rows marked 'not relevant' are skipped, unknown ones kept", [r["part_id"] for r in k] == ["U1", "X"]
+      and [r["part_id"] for r in sk] == ["R1"])
+UPP, W, H = 0.0108, 1931, 1099                      # LumenPnP top camera: about 20.8 x 11.9 mm
+check("SOT-23 / SOIC-8 / QFN-7x7 fit the photo", all(tp.view_check(l, w, UPP, W, H) is None
+                                                     for l, w in ((2.9, 1.3), (4.9, 3.9), (7.0, 7.0))))
+check("a 14 mm QFP is bigger than the view -> warning", "camera view" in (tp.view_check(14.0, 14.0, UPP, W, H) or ""),
+      tp.view_check(14.0, 14.0, UPP, W, H))
+check("unknown body size -> no warning", tp.view_check(None, None, UPP, W, H) is None)
+
 print("%d of %d checks passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

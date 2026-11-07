@@ -9,6 +9,10 @@ When you are not sure whether a part will be placed the right way round, for exa
 
 Place **one** part on its real pads, look at the photo, and get the part back into its feeder.
 
+It is meant mainly for the **bigger, polarised parts**, where the orientation matters and a wasted part costs something: ICs, diodes, LEDs, electrolytic capacitors.
+- Rows marked *orientation not relevant* (for example R / C / L) are skipped, with a note. If the orientation does matter, use *Toggle 'orientation matters'* first.
+- The photo is a square crop of the top camera image. Its short side is about 11.9 mm on the LumenPnP. A part about that size or bigger gets a warning that pin 1 may be outside the photo: check it in OpenPnP's camera view.
+
 ## What happens
 
 | Step | Machine | Notes |

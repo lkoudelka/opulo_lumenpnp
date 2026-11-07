@@ -218,6 +218,11 @@ _Sys.out.println("refusals (no motion)")
 ui.table.clearSelection()
 check("no row selected -> asks for rows with a feeder", ui.test() is None and "Select the row" in FakeOptionPane.messages[-1])
 i = row_index("U-TEST")
+ui.model.rows[i]["matters"] = False                 # as if marked 'orientation not relevant'
+ui.table.setRowSelectionInterval(i, i)
+check("row marked 'not relevant' -> skipped with a note, no window", ui.test() is None
+      and "not relevant" in FakeOptionPane.messages[-1] and "U-TEST" in FakeOptionPane.messages[-1], FakeOptionPane.messages[-1])
+ui.model.rows[i]["matters"] = True
 ui.table.setRowSelectionInterval(i, i)
 dlg = ui.test()
 check("dialog: placement U1 preselected (first not placed), nozzle with compatible tip offered",
