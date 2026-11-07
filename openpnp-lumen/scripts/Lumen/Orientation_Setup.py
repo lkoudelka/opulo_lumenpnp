@@ -14,6 +14,10 @@
 # Every mark is confirmed by you in the two squares, and the list
 # shows what is confirmed and whether the feeder rotation is correct.  Nothing is changed
 # without "Apply".
+# "Test placement on the PCB" settles a doubt on the real board: one part is placed on its pads
+# (board WITHOUT solder paste), photographed with the top camera, you mark pin 1 of the part (and of
+# the board) in the photo, then the part is picked up again and recycled into its feeder
+# (Photon: SkipNext; strip / tray: feed count - 1; lumen.testplace).
 from __future__ import absolute_import, division, print_function
 
 import math
@@ -29,21 +33,27 @@ import lumen.helptext
 import lumen.uihelp
 import lumen.jobinfo
 import lumen.orientation
+import lumen.inspect
+import lumen.testplace
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.orientation)
+reload(lumen.inspect)
+reload(lumen.testplace)
 from lumen import jobinfo, oppnp
+from lumen import testplace as tp
 from lumen import orientation as ori
 from lumen.oppnp import JavaException
 
 from java.awt import (BasicStroke, BorderLayout, Color, Dimension, FlowLayout, Font, FontMetrics, Graphics2D,
                       GridLayout, RenderingHints)
-from java.awt.event import MouseAdapter
+from java.awt.event import MouseAdapter, WindowAdapter
 from java.lang import String
-from javax.swing import (BorderFactory, JButton, JCheckBox, JFileChooser, JFrame, JLabel, JOptionPane, JPanel,
-                         JScrollPane, JTable, JTextArea, ListSelectionModel, WindowConstants)
+from javax.swing import (BorderFactory, BoxLayout, ButtonGroup, JButton, JCheckBox, JComboBox, JFileChooser, JFrame, JLabel,
+                         JOptionPane, JPanel, JRadioButton, JScrollPane, JTable, JTextArea, ListSelectionModel,
+                         WindowConstants)
 from javax.swing.filechooser import FileNameExtensionFilter
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 from org.openpnp.model import LengthUnit, Placement
@@ -85,6 +95,9 @@ class DotSquare(JPanel):
         self.pads = []          # [(number, x, y)] mm, drawn on the body (CAD: footprint; feeder: predicted)
         self.pads_dim = False   # predicted pads (feeder square) are drawn lighter
         self.image = None       # optional camera image (feeder square)
+        self.ring = None        # second mark (test placement: pin 1 of the BOARD), drawn as a green ring
+        self.pad_mm = None      # pads at true scale: the square shows pad_mm x pad_mm (photo of a placed part)
+        self.click_sets = "dot"  # "ring": a click moves the green ring instead of the red dot
         self.hint = ""
         self.setPreferredSize(Dimension(320, 380))
         self.setBackground(Color.WHITE)
@@ -110,7 +123,10 @@ class DotSquare(JPanel):
             if dist < bd:
                 best, bd = d, dist
         if bd < self.geometry()[2] * 0.2:
-            self.dot = best
+            if self.click_sets == "ring":
+                self.ring = best
+            else:
+                self.dot = best
             self.repaint()
             if self.on_change:
                 self.on_change()
@@ -136,7 +152,7 @@ class DotSquare(JPanel):
         g.drawRect(x0, y0, int(s), int(s))
         if self.pads:
             ext = max([max(abs(x), abs(y)) for _, x, y in self.pads] + [0.1])
-            k = s * 0.44 / ext
+            k = s / self.pad_mm if self.pad_mm else s * 0.44 / ext
             for n, x, y in self.pads:
                 if self.pads_dim:
                     g.setColor(Color(225, 120, 120) if n == "1" else Color(215, 190, 120))
@@ -144,6 +160,12 @@ class DotSquare(JPanel):
                     g.setColor(Color(200, 40, 40) if n == "1" else Color(184, 134, 11))
                 pw = max(3, int(s * (0.07 if len(self.pads) <= 4 else 0.025)))
                 g.fillRect(int(cx + x * k - pw / 2), int(cy - y * k - pw / 2), pw, pw)
+        if self.ring in POS:
+            mx, my = self.mark_xy(self.ring)
+            rr = s * 0.055 * 2.2
+            g.setColor(Color(0, 170, 0))
+            g.setStroke(BasicStroke(4))
+            g.drawOval(int(mx - rr), int(my - rr), int(rr * 2), int(rr * 2))
         for d in POS:
             mx, my = self.mark_xy(d)
             rr = s * 0.055
@@ -286,6 +308,332 @@ class CheckDialog(object):
         self.owner.refresh()
 
 
+class _Closing(WindowAdapter):
+    def __init__(self, dlg):
+        WindowAdapter.__init__(self)
+        self.dlg = dlg
+
+    def windowClosing(self, e):
+        self.dlg.close()
+
+
+class TestDialog(object):
+    """Test placement of one part on its pads (board without paste): photo, pin-1 marks, recycle.
+    The machine part is lumen.testplace; this is the window around it."""
+    AFTER = [("return", "return the part to its feeder (recommended)"), ("discard", "discard it (discard location)"),
+             ("leave", "leave it on the board (I remove it by hand)")]
+
+    def __init__(self, owner, row, on_done=None):
+        self.owner, self.row, self.on_done = owner, row, on_done
+        self.state, self.res, self.busy = None, None, False
+        self.bl = self.pl = self.nz = None
+        part, feeder = row["part"], row["feeder"]
+        job = gui.getJobTab().getJob()
+        self.cands = [(bl, pl, placed) for bl, pl, placed in (jobinfo.job_placements(job) if job is not None else [])
+                      if pl.getPart() == part]
+        self.nozzles = tp.compatible_nozzles(machine, part)
+        f = self.frame = JFrame("Test placement: %s" % row["part_id"])
+        f.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE)
+        f.addWindowListener(_Closing(self))
+        root = JPanel(BorderLayout(6, 6))
+        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
+        form = JPanel(GridLayout(0, 2, 6, 2))
+        form.add(JLabel("Placement"))
+        labels = ["%s on %s%s" % (pl.getId(), bl.getBoard().getName() if bl.getBoard() is not None else "?",
+                                  " (placed already)" if placed else "") for bl, pl, placed in self.cands]
+        self.where = JComboBox(labels or ["(the job has no placement of this part)"])
+        if self.cands:
+            self.where.setSelectedIndex(tp.placement_choices([(l, c[2]) for l, c in zip(labels, self.cands)]))
+        form.add(self.where)
+        form.add(JLabel("Nozzle"))
+        self.nozzle = JComboBox([n.getName() + " (" + n.getNozzleTip().getName() + ")" for n in self.nozzles]
+                                or ["none: load a compatible nozzle tip first"])
+        form.add(self.nozzle)
+        form.add(JLabel("After the decision"))
+        self.after = JComboBox([t for _, t in self.AFTER])
+        form.add(self.after)
+        north = JPanel(BorderLayout(4, 4))
+        north.add(form, BorderLayout.NORTH)
+        rot = row.get("feeder_rot")
+        north.add(JLabel("<html>Feeder <b>%s</b> (%s): recycling = %s.<br>Feeder rotation now %s; CAD pin 1 %s.</html>" % (
+            feeder.getName(), feeder.getClass().getSimpleName(), tp.recycle_text(feeder.getClass().getSimpleName()),
+            "?" if rot is None else "%+.0f deg" % ori.norm(rot),
+            row.get("cad_dot") or "unknown (click the board's pin 1 in the photo)")), BorderLayout.CENTER)
+        chk = JPanel(GridLayout(0, 1))
+        self.nopaste = JCheckBox("The pads of this placement have NO solder paste (bare or test board)", False)
+        self.align = JCheckBox("Bottom vision alignment as in the job", True)
+        chk.add(self.nopaste)
+        chk.add(self.align)
+        north.add(chk, BorderLayout.SOUTH)
+        root.add(north, BorderLayout.NORTH)
+        centre = JPanel(BorderLayout(8, 0))
+        self.square = DotSquare("Placed part, top camera (X right / Y up)",
+                                "red dot = pin 1 of the PART, green ring = pin 1 of the BOARD", self.update)
+        self.square.setPreferredSize(Dimension(420, 480))
+        self.square.hint = "Start the test placement; the photo of the placed part appears here."
+        centre.add(self.square, BorderLayout.CENTER)
+        side = self.side = JPanel()
+        side.setLayout(BoxLayout(side, BoxLayout.Y_AXIS))
+        side.setPreferredSize(Dimension(320, 480))
+        self.mark_part = JRadioButton("Click marks pin 1 of the PART (red dot)", True, actionPerformed=lambda e: self.click_mode())
+        self.mark_board = JRadioButton("Click marks pin 1 of the BOARD (green ring)", False,
+                                       actionPerformed=lambda e: self.click_mode())
+        grp = ButtonGroup()
+        grp.add(self.mark_part)
+        grp.add(self.mark_board)
+        self.camera_txt = JLabel(" ")
+        self.golden = JCheckBox("Save as golden sample of the package", False)
+        for c in (self.mark_part, self.mark_board, self.golden, self.camera_txt):
+            c.setAlignmentX(0.0)
+            side.add(c)
+        centre.add(side, BorderLayout.EAST)
+        root.add(centre, BorderLayout.CENTER)
+        bottom = JPanel(BorderLayout())
+        self.result = JLabel(" ")
+        self.result.setFont(Font(Font.SANS_SERIF, Font.BOLD, 14))
+        bottom.add(self.result, BorderLayout.NORTH)
+        b = JPanel(FlowLayout(FlowLayout.RIGHT))
+        self.start_btn = JButton("Start test placement", actionPerformed=lambda e: self.start())
+        self.retake_btn = JButton("Retake photo", actionPerformed=lambda e: self.retake())
+        self.finish_btn = JButton("Finish: recycle the part, store the result", actionPerformed=lambda e: self.finish())
+        for x in (self.start_btn, self.retake_btn, self.finish_btn, JButton("Close", actionPerformed=lambda e: self.close())):
+            b.add(x)
+        bottom.add(b, BorderLayout.SOUTH)
+        root.add(bottom, BorderLayout.SOUTH)
+        f.setContentPane(lumen.uihelp.wrap(root, "orientation_test"))
+        f.pack()
+        f.setLocationRelativeTo(owner.frame)
+        self.update()
+        f.setVisible(True)
+
+    def selection(self):
+        i, j = self.where.getSelectedIndex(), self.nozzle.getSelectedIndex()
+        bl, pl, _ = self.cands[i] if 0 <= i < len(self.cands) else (None, None, None)
+        return bl, pl, (self.nozzles[j] if 0 <= j < len(self.nozzles) else None)
+
+    def click_mode(self):
+        self.square.click_sets = "ring" if self.mark_board.isSelected() else "dot"
+
+    def evaluation(self):
+        return tp.evaluate(self.square.dot, self.square.ring, self.row.get("feeder_rot"))
+
+    def update(self):
+        on = self.state is not None and self.state.get("on_board")
+        self.start_btn.setEnabled(not self.busy and not on)
+        self.retake_btn.setEnabled(not self.busy and bool(on))
+        self.finish_btn.setEnabled(not self.busy and bool(on))
+        ev = self.evaluation()
+        self.golden.setEnabled(bool(ev["ok"]) and self.res is not None)
+        if self.busy:
+            return
+        self.result.setText("No test yet." if self.state is None else ev["text"])
+
+    # -- machine work --------------------------------------------------------------------
+    def start(self):
+        bl, pl, nz = self.selection()
+        feeder = self.row["feeder"]
+        if pl is None:
+            JOptionPane.showMessageDialog(self.frame, "The job has no placement of %s." % self.row["part_id"])
+            return False
+        probs = tp.problems(machine, bl, pl, feeder, nz)
+        if not self.nopaste.isSelected():
+            probs.insert(0, "tick 'NO solder paste': the part is put on the bare pads and picked up again")
+        if probs:
+            JOptionPane.showMessageDialog(self.frame, "Cannot start the test placement:\n- " + "\n- ".join(probs))
+            return False
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Test placement"):
+            return False
+        msg = ("The machine will now:\n 1. feed one %s from %s and pick it with %s\n 2. %s\n 3. place it on %s - pads WITHOUT "
+               "solder paste\n 4. photograph it with the top camera\nThe part stays on the board until you finish; then it is "
+               "picked up and recycled (%s).\n\nStart?" % (
+                   self.row["part_id"], feeder.getName(), nz.getName(),
+                   "align it with bottom vision" if self.align.isSelected() else "no bottom vision",
+                   self.where.getSelectedItem(), tp.recycle_text(feeder.getClass().getSimpleName())))
+        if JOptionPane.showConfirmDialog(self.frame, msg, "Test placement", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+            return False
+        self.busy = True
+        self.result.setText("Running: feed, pick, align, place, photo ...")
+        self.update()
+        golden_root = os.path.join(oppnp.lumen_dir(scripting), "inspection")
+        save = os.path.join(oppnp.lumen_dir(scripting), "testplace")
+        align = self.align.isSelected()
+
+        def work():
+            err = None
+            try:
+                st = oppnp.run_machine_task(machine, lambda: tp.run_test(machine, bl, pl, feeder, nz, align, self.owner.log))
+                self.state, self.bl, self.pl, self.nz = st, bl, pl, nz
+                self.res = oppnp.run_machine_task(machine, lambda: tp.photo(machine, bl, pl, st, golden_root, save))
+            except (Exception, JavaException) as e:
+                err = e
+            oppnp.on_ui(lambda: self.done(err, "Test placement"))
+        oppnp.in_background(work)
+        return True
+
+    def retake(self):
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Retake photo"):
+            return
+        self.busy = True
+        self.update()
+        golden_root = os.path.join(oppnp.lumen_dir(scripting), "inspection")
+        save = os.path.join(oppnp.lumen_dir(scripting), "testplace")
+
+        def work():
+            err = None
+            try:
+                self.res = oppnp.run_machine_task(machine, lambda: tp.photo(machine, self.bl, self.pl, self.state, golden_root, save))
+            except (Exception, JavaException) as e:
+                err = e
+            oppnp.on_ui(lambda: self.done(err, "Photo"))
+        oppnp.in_background(work)
+
+    def done(self, err, what):
+        self.busy = False
+        if err is not None:
+            where = getattr(err, "where", None)
+            text = "%s stopped: %s%s" % (what, err, "\nThe part: %s" % where if where else "")
+            if self.state is not None and self.state.get("on_board"):
+                text += "\nThe part IS ON THE BOARD: Retake photo, or Finish to pick it up and recycle it."
+            self.owner.log(text.replace("\n", " | "))
+            JOptionPane.showMessageDialog(self.frame, text)
+        if self.res is not None:
+            self.show_photo()
+        self.update()
+
+    def show_photo(self):
+        r, st, sq = self.res, self.state, self.square
+        sq.image, sq.pad_mm = r["crop"], r["crop_mm"]
+        sq.pads = ori.rotate_points(self.row.get("pads") or [], st["placement_rot"])
+        sq.pads_dim = True
+        if sq.ring is None:
+            sq.ring = tp.board_mark(self.row.get("cad_dot"), st["placement_rot"])
+        if sq.dot is None and r.get("proposal") is not None and sq.ring:
+            sq.dot = ori.rotate_dot(sq.ring, r["proposal"])
+        lines = []
+        bd = r.get("body")
+        if bd is not None:
+            lines.append("Body: found %.2f mm from the place location, %+.1f deg" % (
+                math.hypot(bd["dx"], bd["dy"]), bd["angle_err"]) if bd.get("found") else "Body: %s" % bd.get("why"))
+        else:
+            lines.append("Body: size unknown (%s)" % r.get("size_source"))
+        lines.append("Camera: " + r["proposal_why"] + ("" if r.get("proposal") is None else " - preset, check it"))
+        if tp.off90(st["placement_rot"]) > 1.0:
+            lines.append("Placement rotation %.1f deg is not a multiple of 90: the corners are the nearest ones" % st["placement_rot"])
+        if st.get("warning"):
+            lines.append("<font color='red'>%s</font>" % st["warning"])
+        lines.append("Photo: lumen/testplace/%s" % os.path.basename(r.get("image") or "-"))
+        self.camera_txt.setText("<html><div style='width:230px'>%s</div></html>" % "<br><br>".join(lines))
+        self.side.revalidate()
+        sq.hint = ("Pads from CAD drawn light (red = pad 1). " if sq.pads else "") + \
+                  "Click pin 1 of the part; the green ring is pin 1 of the board%s." % (
+                      " from CAD - move it if the board marking says otherwise" if self.row.get("cad_dot") else " - click it")
+        sq.repaint()
+
+    def finish(self, no_result=False):
+        if self.busy or self.state is None or not self.state.get("on_board"):
+            return False
+        feeder = self.row["feeder"]
+        mode = "return" if no_result else self.AFTER[self.after.getSelectedIndex()][0]
+        ev = {"turn": None, "ok": None, "new_rotation": None, "text": "no result"} if no_result else self.evaluation()
+        apply_rot = None
+        if not no_result:
+            if ev["turn"] is None:
+                if JOptionPane.showConfirmDialog(self.frame, "Pin 1 is not marked in the photo - finish WITHOUT a result?",
+                                                 "Finish", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+                    return False
+            elif ev["ok"] is False and ev["new_rotation"] is not None:
+                q = JOptionPane.showConfirmDialog(
+                    self.frame, "%s\n\nSet the rotation of %s to %+.0f deg AFTER the part is back in the feeder?\n"
+                    "Yes = set it    No = only record the result" % (ev["text"], feeder.getName(), ev["new_rotation"]),
+                    "Finish", JOptionPane.YES_NO_CANCEL_OPTION)
+                if q not in (JOptionPane.YES_OPTION, JOptionPane.NO_OPTION):
+                    return False
+                if q == JOptionPane.YES_OPTION:
+                    apply_rot = ev["new_rotation"]
+        self.busy = True
+        self.result.setText("Running: pick the part up from the board, %s ..." % dict(self.AFTER)[mode])
+        self.update()
+        body = self.res.get("body") if self.res else None
+        st, nz, pl = self.state, self.nz, self.pl
+
+        def work():
+            out, err = None, None
+            try:
+                out = oppnp.run_machine_task(machine, lambda: tp.recycle(machine, feeder, nz, pl, st, mode, body, self.owner.log))
+            except (Exception, JavaException) as e:
+                err = e
+            oppnp.on_ui(lambda: self.finished(ev, apply_rot, out, err))
+        oppnp.in_background(work)
+        return True
+
+    def finished(self, ev, apply_rot, out, err):
+        self.busy = False
+        r = self.row
+        msgs = ["Part: %s" % out] if err is None else ["Recycling FAILED: %s%s" % (err, " - " + err.where if getattr(err, "where", None) else "")]
+        applied = None
+        if apply_rot is not None:
+            try:
+                applied = oppnp.set_feeder_rotation(r["feeder"], apply_rot)
+                msgs.append("Feeder %s: rotation set to %+.0f deg." % (r["feeder"].getName(), applied))
+            except (Exception, JavaException) as e:
+                msgs.append("Rotation NOT set: %s" % e)
+        if self.golden.isSelected() and ev.get("ok") and self.res is not None and self.res.get("length"):
+            pkg = r["part"].getPackage()
+            p = lumen.inspect.save_golden(os.path.join(oppnp.lumen_dir(scripting), "inspection"), str(pkg.getId()),
+                                          self.res["_image"], self.res["upp"], self.res["axis_rot"], self.res["length"],
+                                          self.res["width"], "test placement %s" % self.state["ref"])
+            msgs.append("Golden sample saved: %s" % p)
+        self.store_result(ev, applied, out, err)
+        self.owner.log("test placement %s / %s: %s; %s" % (r["part_id"], self.state["ref"], ev["text"], "; ".join(msgs)))
+        JOptionPane.showMessageDialog(self.frame, "%s\n\n%s" % (ev["text"], "\n".join(msgs)))
+        if self.state.get("on_board"):
+            self.update()                                   # still on the board: Finish again (e.g. "leave")
+            return
+        self.frame.dispose()
+        self.owner.refresh()
+        if self.on_done:
+            self.on_done()
+
+    def store_result(self, ev, applied, out, err):
+        r, sq, st = self.row, self.square, self.state
+        store = self.owner.store
+        rec = {"t": st["t"], "ref": st["ref"], "feeder": r["feeder"].getName(), "nozzle": st["nozzle"],
+               "part_mark": sq.dot, "board_mark": sq.ring, "placement_rot": st["placement_rot"], "turn": ev["turn"],
+               "result": "correct" if ev["ok"] else "wrong" if ev["ok"] is False else "no result",
+               "rotation_applied": applied, "recycle": str(out) if err is None else "FAILED: %s" % err,
+               "photo": (self.res or {}).get("image")}
+        store.part(r["part_id"]).setdefault("tests", []).append(rec)
+        if ev["turn"] is not None:
+            cad = tp.cad_from_board(sq.ring, st["placement_rot"])
+            src = r.get("cad_source") if cad == r.get("cad_dot") and r.get("cad_source") else "test placement"
+            store.set_cad(r["part_id"], cad, src, True)
+            if r.get("footprint"):
+                store.set_footprint(r["footprint"], {"dot": cad, "pins": r.get("pins"), "pads": r.get("pads")},
+                                    src.replace("table:", ""), True)
+            fdot = tp.feeder_dot_for(cad, ev["new_rotation"])
+            if fdot:
+                store.set_feeder(r["part_id"], str(r["feeder"].getId()), fdot, True, applied)
+        store.save()
+
+    def close(self):
+        if self.busy:
+            JOptionPane.showMessageDialog(self.frame, "The machine is working - wait until it is done.")
+            return
+        if self.state is not None and self.state.get("on_board"):
+            q = JOptionPane.showConfirmDialog(
+                self.frame, "The test part is still on the board (%s).\nPick it up and return it to the feeder now (no result "
+                "stored)?\nNo = leave it there, I remove it by hand." % self.state["ref"], "Close", JOptionPane.YES_NO_CANCEL_OPTION)
+            if q == JOptionPane.YES_OPTION:
+                self.finish(no_result=True)
+                return
+            if q != JOptionPane.NO_OPTION:
+                return
+            self.owner.log("test placement %s: closed, part LEFT ON THE BOARD" % self.state["ref"])
+        self.frame.dispose()
+        if self.on_done:
+            self.on_done()
+
+
 COLS = ["Part", "Footprint", "Refs", "Orientation", "CAD pin 1", "Feeder", "Feeder mark", "Needs", "Feeder now", "Status"]
 
 
@@ -362,7 +710,7 @@ class OrientationSetup(object):
         top.add(srow, BorderLayout.SOUTH)
         root.add(top, BorderLayout.NORTH)
         self.table = JTable(self.model)
-        self.table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+        self.table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION)
         rend = StatusRenderer(self.model)
         for i, w in enumerate((140, 170, 120, 80, 150, 170, 100, 50, 70, 330)):
             self.table.getColumnModel().getColumn(i).setPreferredWidth(w)
@@ -372,6 +720,7 @@ class OrientationSetup(object):
         root.add(sp, BorderLayout.CENTER)
         b = JPanel(FlowLayout(FlowLayout.RIGHT))
         b.add(JButton("Check selected (two squares)...", actionPerformed=lambda e: self.check()))
+        b.add(JButton("Test placement on the PCB...", actionPerformed=lambda e: self.test()))
         b.add(JButton("Toggle 'orientation matters'", actionPerformed=lambda e: self.toggle()))
         b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
@@ -738,6 +1087,24 @@ class OrientationSetup(object):
             JOptionPane.showMessageDialog(self.frame, "Select a row.")
             return None
         return CheckDialog(self, x)
+
+    def test(self):
+        """Test placement of the selected rows' parts, one after the other (each in its own window)."""
+        rows = [self.model.rows[i] for i in self.table.getSelectedRows() if self.model.rows[i].get("feeder") is not None]
+        if not rows:
+            JOptionPane.showMessageDialog(self.frame, "Select the row(s) you are not sure about - rows with a feeder "
+                                                      "(the test part is taken from it and returned to it).")
+            return None
+        self._tests = [(x["part_id"], x["feeder"]) for x in rows[1:]]
+        return TestDialog(self, rows[0], self._next_test)
+
+    def _next_test(self):
+        while getattr(self, "_tests", None):
+            pid, feeder = self._tests.pop(0)
+            fresh = [r for r in self.model.rows if r["part_id"] == pid and r.get("feeder") == feeder]
+            if fresh:
+                return TestDialog(self, fresh[0], self._next_test)
+        return None
 
     def toggle(self):
         x = self.selected()

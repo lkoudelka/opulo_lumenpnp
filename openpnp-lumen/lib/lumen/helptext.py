@@ -367,7 +367,10 @@ unknown show <b>CAD pin 1 NOT DETECTED</b> with what to load. <i>Detection repor
 which source / not detected and why) and saves it to ~/.openpnp2/lumen/logs/.</p>
 <p>Every mark is confirmed in the two squares (<i>Check selected</i>). Nothing is changed on the feeder without
 <i>Confirm and apply</i>.</p>
-""" + MOVES % "<i>Show top camera at the feeder</i> moves the camera.",
+<p><b>Still in doubt?</b> <i>Test placement on the PCB</i> puts one part on its real pads (board without paste), you mark
+pin 1 in the photo, and the part goes back into its feeder (nothing wasted).</p>
+""" + MOVES % ("<i>Show top camera at the feeder</i> moves the camera; <i>Test placement on the PCB</i> feeds, picks, "
+                "places and picks up again (only after its own confirmation)."),
     "tips": {
         "Load CAD data (board / Gerber / library)": "Choose a KiCad board (.kicad_pcb), the top copper Gerber X2, a folder or "
                                                     ".zip with the Gerbers / the KiCad project, or a footprint library folder. "
@@ -377,6 +380,9 @@ which source / not detected and why) and saves it to ~/.openpnp2/lumen/logs/.</p
                             "NOT DETECTED with the reason and what to load. Saved to ~/.openpnp2/lumen/logs/.",
         "only parts where orientation matters": "Hide resistors, capacitors and other parts whose orientation does not matter.",
         "Check selected (two squares)": "Open the two squares for the selected row: click pin 1 in the feeder and in CAD.",
+        "Test placement on the PCB": "For the selected row(s) you are not sure about: place one part on its real pads (board "
+                                     "WITHOUT solder paste), photograph it, mark pin 1 in the photo, then the part is picked up "
+                                     "again and recycled into its feeder. Several rows: one window after the other.",
         "Toggle 'orientation matters'": "Override the automatic decision for the selected part.",
         "Refresh": "Re-read the job, feeders and sources.",
         "Close": "Close the window.",
@@ -400,6 +406,50 @@ HELP["orientation_check"] = {
         "Confirm and apply rotation to feeder": "Store both marks and set the feeder rotation (after confirmation).",
         "Confirm": "Store both marks without changing the feeder.",
         "Cancel": "Close without storing.",
+    },
+    "columns": {},
+}
+
+HELP["orientation_test"] = {
+    "title": "Test placement - the part on its real pads, pin 1 marked in the photo, then recycled",
+    "html": """
+<p>For a part you are not sure about: <b>one</b> part is fed, picked, aligned (bottom vision, as in the job) and placed on
+its real pads, then photographed with the top camera. <b>The board must have NO solder paste</b> on these pads (bare or test
+board): the part is picked up again afterwards.</p>
+<p>In the photo: the <b>red dot</b> = pin 1 of the <b>part</b> (click it; preset only when a golden sample of the package
+recognises the turn), the <b>green ring</b> = pin 1 of the <b>board</b> (from CAD; switch the click mode and move it if the
+silkscreen / pad 1 says otherwise). Light pads = CAD pads at the placement rotation (red = pad 1).
+Same corners -> CORRECT. Different -> the feeder rotation that would have been right is shown.</p>
+<p><b>Finish</b> picks the part up from the board in the same grip (corrected by where the camera found it) and, by
+<i>After the decision</i>, returns it to its feeder with OpenPnP's take-back: <b>Photon: back into its pocket, the next feed
+is skipped</b> (the tape does not move, the job picks this same part); strip / tray feeders: back into its pocket, feed count
+- 1. If the feeder cannot take it back it is discarded and that is reported. A corrected rotation is applied only
+<b>after</b> the part is back (you are asked), and the marks are stored as confirmed for Orientation Setup. Closing the window
+with the part on the board asks what to do with it.</p>
+<p>Not used: the Lumen while-feeding camera check and the pick vacuum check (they belong to job feeds); the job's placed
+status is not changed.</p>
+""" + MOVES % "<i>Start test placement</i>: feed, pick, bottom vision, place, top camera; <i>Retake photo</i>: camera; "
+                 "<i>Finish</i>: pick up from the board, take back into the feeder (or discard). Each after confirmation.",
+    "tips": {
+        "Placement": "Which placement of this part is used (the first one not placed yet is preselected). The part goes on "
+                     "these pads.",
+        "Nozzle": "Empty nozzles whose loaded tip suits the package. No automatic tip change: load the tip first.",
+        "After the decision": "What Finish does with the part: back into its feeder (recommended, nothing wasted), to the "
+                              "discard location, or leave it on the board.",
+        "The pads of this placement have NO solder paste": "Required: the part is put on the bare pads and picked up again. "
+                                                           "With paste the part and the pads would be smeared.",
+        "Bottom vision alignment as in the job": "Align the part with the bottom camera before placing, exactly like the job "
+                                                 "(recommended: the test then shows what the job would place).",
+        "Click marks pin 1 of the PART": "A click in the photo sets the red dot: the corner where the part's own pin-1 mark is.",
+        "Click marks pin 1 of the BOARD": "A click in the photo moves the green ring: the corner where the board's pin-1 "
+                                          "marking (silkscreen dot, pad 1 shape) is.",
+        "Save as golden sample": "Only for a CORRECT part: Placement Inspection compares later placements of this "
+                                           "package with this photo, and the next test placement can preset the part mark.",
+        "Start test placement": "Feed, pick, align, place on the selected placement, photograph. Asks first.",
+        "Retake photo": "Photograph the placed part again (camera only).",
+        "Finish": "Pick the part up from the board and recycle it (After the decision); store the result; set the corrected "
+                  "feeder rotation if you agree.",
+        "Close": "Close; if the part is still on the board you are asked whether to return it to the feeder first.",
     },
     "columns": {},
 }

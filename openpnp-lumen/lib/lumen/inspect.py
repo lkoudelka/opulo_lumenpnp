@@ -182,6 +182,32 @@ def match_golden(image, upp, golden, expect_rot):
             "polarity_suspect": s180 > s + 0.10}
 
 
+def match_golden_turns(image, upp, golden, expect_rot, turns=(0.0, 90.0, 180.0, -90.0)):
+    """Golden-sample score with the part turned by each of `turns` (deg CCW, machine frame) against the
+    expected rotation: {turn: score}.  The best turn says how the placed part really sits (test
+    placement, lumen.testplace.propose_turn)."""
+    _cv()
+    from org.opencv.core import Core, Mat, Rect, Size
+    from org.opencv.imgproc import Imgproc
+    g = _gray(image)
+    t = golden["mat"]
+    if abs(golden.get("upp", upp) - upp) / upp > 0.03:
+        t2 = Mat()
+        f = golden["upp"] / upp
+        Imgproc.resize(t, t2, Size(int(t.cols() * f), int(t.rows() * f)))
+        t = t2
+    h, w = g.rows(), g.cols()
+    sm = int(LIMITS["search_mm"] / upp)
+    W, H = min(w, t.cols() + 2 * sm), min(h, t.rows() + 2 * sm)
+    roi = g.submat(Rect(w // 2 - W // 2, h // 2 - H // 2, W, H))
+    out = {}
+    for turn in turns:
+        res = Mat()
+        Imgproc.matchTemplate(roi, rotate(t, expect_rot - golden["rot"] + turn), res, Imgproc.TM_CCOEFF_NORMED)
+        out[float(turn)] = Core.minMaxLoc(res).maxVal
+    return out
+
+
 def verdict(res):
     """'OK' / 'CHECK: ...' / 'FAIL: ...' from a result dict."""
     if res.get("error"):
