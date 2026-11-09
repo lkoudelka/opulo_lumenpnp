@@ -6,12 +6,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REL=${1:?usage: run_all.sh RELEASE.bin}
 RC=0
 for t in "test_photon_sim.py" "test_learning.py" "test_orientation.py" "test_tapevision.py" "test_pickvac.py" "test_feederopts.py" "test_partmatch.py" "test_testplace.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" \
-         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_pickvac_offline.sh" "run_help_offline.sh" "run_feeder_assist_offline.sh" "run_testplace_sim.sh" "run_config_compat.sh" "test_profiles.py"; do
+         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_pickvac_offline.sh" "run_help_offline.sh" "run_feeder_assist_offline.sh" "run_testplace_sim.sh" "run_tapevision_offline.sh" "run_config_compat.sh" "test_profiles.py"; do
     echo "=== $t"
     case $t in
         test_learning.py|test_profiles.py|test_orientation.py|test_tapevision.py|test_pickvac.py|test_feederopts.py|test_partmatch.py|test_testplace.py) ${PY:-python3} "$HERE/$t" ;;
         *.py) ${PY:-python3} "$HERE/$t" "$REL" ;;
-        run_openpnp_headless.sh|run_config_compat.sh|run_orientation_headless.sh|run_inspect_offline.sh|run_pickvac_offline.sh|run_help_offline.sh|run_feeder_assist_offline.sh|run_testplace_sim.sh) "$HERE/$t" ;;
+        run_openpnp_headless.sh|run_config_compat.sh|run_orientation_headless.sh|run_inspect_offline.sh|run_pickvac_offline.sh|run_help_offline.sh|run_feeder_assist_offline.sh|run_testplace_sim.sh|run_tapevision_offline.sh) "$HERE/$t" ;;
         *) "$HERE/$t" "$REL" ;;
     esac > "${TMPDIR:-/tmp}/lumen-test.out" 2>&1
     trc=$?

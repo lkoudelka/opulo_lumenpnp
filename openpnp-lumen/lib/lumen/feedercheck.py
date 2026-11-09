@@ -88,7 +88,7 @@ def _save(img, r, save_dir, name, holes=None, pocket=None):
         G.setColor(g, Color.YELLOW)
         G.drawOval(g, int(x - d / 2), int(y - d / 2), int(d), int(d))
     for q in r.get("pockets", []):
-        G.setColor(g, Color(0, 200, 0) if q["part"] else Color.RED)
+        G.setColor(g, Color(0, 200, 0) if q.get("part") else Color.RED)
         G.drawRect(g, int(q["x"] - q["w"] / 2), int(q["y"] - q["h"] / 2), int(q["w"]), int(q["h"]))
     G.setColor(g, Color.CYAN)
     for x, y, d in holes or []:

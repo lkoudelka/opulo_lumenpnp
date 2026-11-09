@@ -18,6 +18,24 @@ def check(name, cond, detail=""):
     print("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, detail))
 
 
+print("hole lines (no OpenCV needed)")
+U = 0.0108
+mm = lambda v: v / U
+own = [(mm(4.9), mm(y), 70) for y in (1.0, 5.0, 9.0)]          # 12 mm tape: line 5.5 mm left of the centre (10.43 mm)
+nbr = [(mm(20.2), mm(y), 70) for y in (2.0, 6.0, 10.0)]        # neighbouring tape's holes 9.8 mm right
+size = (1931, 1099)
+lines = tv.hole_lines(own + nbr, U)
+check("two tapes in view -> two hole lines", len(lines) == 2, [len(x) for x in lines])
+check("the line fitting a standard tape (F 5.5) is chosen, not the neighbour's", tv.choose_line(lines, size, U) == sorted(own))
+check("only the neighbour's line -> misfit > 1 mm (eia_pocket refuses)", tv.line_fit(sorted(nbr), size, U) > 1.0
+      and "error" in tv.eia_pocket(sorted(nbr), size, U, 4))
+dark = lambda x, y, r: ([20] * 50, [180] * 50)                 # paper: black hole in white tape
+emb = lambda x, y, r: ([40] * 40 + [200] * 10, [75] * 50)       # embossed tape: dark hole with a bright reflection
+rib = lambda x, y, r: ([60, 70, 80] * 20, [62, 72, 78] * 20)   # feeder ribbing, no tape loaded
+check("real holes kept (paper, embossed), ribbing circles dropped",
+      len(tv.real_holes(own, dark)) == 3 and len(tv.real_holes(own, emb)) == 3 and tv.real_holes(own, rib) == [])
+check("no real holes -> 'no tape at the pick location?'", "no tape" in tv.eia_pocket(tv.real_holes(own, rib), size, U, 4)["error"])
+
 try:
     import cv2
     import numpy as np
@@ -67,6 +85,18 @@ g, upp = load("slot27-*.png")
 e8 = eia(g, upp, 8.0)
 e4 = eia(g, upp, 4.0)
 check("8 mm pitch: candidate grid 4 mm (hole parity unknown) -> same pocket as with 4 mm", abs(e8["y"] - e4["y"]) < 1, (e8["y"], e4["y"]))
+print("bench 2026-11-09 (raw images): empty feeders, neighbouring tape in view")
+for pat in ("look-slot15-raw*.png", "look-slot28-raw*.png"):
+    g, upp = load(pat)
+    check("%s: no tape loaded (ribbed feeder housing) -> 'no tape', no offset" % pat[5:11],
+          "no tape" in eia(g, upp, 4).get("error", ""), eia(g, upp, 4))
+for pat, pitch, want in (("look-slot4-raw*.png", 8, (0.13, 1.84)), ("look-slot3-raw*.png", 8, (0.26, 0.38)),
+                         ("look-slot12-raw*.png", 2, (-0.04, -0.90)), ("look-slot38-raw*.png", 4, (-0.06, 1.69))):
+    g, upp = load(pat)
+    e = eia(g, upp, pitch)
+    o = off(e, g, upp) if not e.get("error") else None
+    check("%s: own hole line, pocket %+.2f/%+.2f (bench result)" % (pat[5:11], want[0], want[1]),
+          o and abs(o[0] - want[0]) < 0.1 and abs(o[1] - want[1]) < 0.1, (e.get("error"), e.get("F"), o))
 check("no standard tape: pick far from any F -> error", "error" in tv.eia_pocket([(100, 100, 70), (100, 464, 70)], (1931, 1099), 0.011, 2))
 print("\n%d/%d checks passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

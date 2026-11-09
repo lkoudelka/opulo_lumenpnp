@@ -233,10 +233,13 @@ def pick_pocket(result, near_y=None):
 F_STANDARD = (3.5, 5.5, 7.5, 11.5)
 
 
-def hole_line(circles, upp):
-    """circles [(x, y, r)] px -> the circles on one line (same x within 0.4 mm) whose spacings are
-    multiples of 4 mm; None if no such pair."""
-    best = None
+HOLE_CORE_MIN = 15.0    # ring median - 20th percentile of the core: real holes 27..210, feeder ribbing 0..8
+
+
+def hole_lines(circles, upp):
+    """circles [(x, y, r)] px -> every line of circles (same x within 0.4 mm) with spacings that are
+    multiples of 4 mm, best first (most matching pairs).  Two lines when a neighbouring tape is in view."""
+    found = []
     for h in circles:
         grp = [q for q in circles if abs(q[0] - h[0]) < 0.4 / upp]
         ys = sorted(q[1] for q in grp)
@@ -246,16 +249,68 @@ def hole_line(circles, upp):
                 n = (ys[j] - ys[i]) * upp / HOLE_PITCH_MM
                 if round(n) >= 1 and abs(n - round(n)) < 0.06:
                     good += 1
-        if good and (best is None or good > best[0]):
-            best = (good, grp)
-    return best[1] if best else None
+        key = sorted(grp)
+        if good and key not in [k for _, k in found]:
+            found.append((good, key))
+    found.sort(key=lambda t: -t[0])
+    return [g for _, g in found]
+
+
+def hole_line(circles, upp):
+    """The best single line (see hole_lines), or None."""
+    lines = hole_lines(circles, upp)
+    return lines[0] if lines else None
+
+
+def line_fit(line, size, upp):
+    """mm between the image centre (the pick location) and the nearest standard pocket distance F."""
+    hx = sorted(q[0] for q in line)[len(line) // 2]
+    fe = abs(size[0] / 2.0 - hx) * upp
+    return min(abs(f - fe) for f in F_STANDARD)
+
+
+def choose_line(lines, size, upp):
+    """The hole line of THIS tape: the one whose distance to the pick location fits a standard tape
+    best (a neighbouring tape's holes are further away).  None if there is no line."""
+    return min(lines, key=lambda ln: line_fit(ln, size, upp)) if lines else None
+
+
+def hole_contrast(core, ring):
+    """Real sprocket hole: a dark core inside the tape (median of the ring - 20th percentile of the core)."""
+    if not core or not ring:
+        return 0.0
+    return _pct(ring, 50) - _pct(core, 20)
+
+
+def real_holes(circles, sample):
+    """Keep circles with a dark core; sample(x, y, r) -> (core values, ring values).  Hough also finds
+    circles on the ribbed feeder housing when no tape is loaded: those have no dark core."""
+    return [c for c in circles if hole_contrast(*sample(c[0], c[1], c[2])) >= HOLE_CORE_MIN]
+
+
+def _ring_sample(get, w, h, x, y, r):
+    """core (< 0.8 r) and ring (1.25..1.7 r) values, every 2nd pixel; get(x0, y0, x1, y1) -> rows."""
+    R = int(1.7 * r) + 1
+    x0, y0, x1, y1 = max(0, int(x) - R), max(0, int(y) - R), min(w, int(x) + R), min(h, int(y) + R)
+    rows = get(x0, y0, x1, y1)
+    core, ring = [], []
+    for j in range(0, y1 - y0, 2):
+        row = rows[j]
+        dy2 = (y0 + j - y) ** 2
+        for i in range(0, x1 - x0, 2):
+            d = math.sqrt((x0 + i - x) ** 2 + dy2)
+            if d < 0.8 * r:
+                core.append(row[i])
+            elif 1.25 * r < d < 1.7 * r:
+                ring.append(row[i])
+    return core, ring
 
 
 def eia_pocket(holes, size, upp, pitch_mm):
     """Pocket centre (px) nearest to the image centre, from the hole line and the part pitch.
     Returns {x, y, F, F_measured, holes, hole_x} or {'error'}."""
     if not holes or len(holes) < 2:
-        return {"error": "sprocket holes not found"}
+        return {"error": "sprocket holes not found (no tape at the pick location?)"}
     w, h = size
     cx, cy = w / 2.0, h / 2.0
     xs = sorted(q[0] for q in holes)
@@ -278,36 +333,65 @@ def eia_pocket(holes, size, upp, pitch_mm):
 def holes_cv2(gray, upp, cv2):
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray)
     img = cv2.GaussianBlur(clahe, (9, 9), 2)
+    h, w = gray.shape[:2]
+    get = lambda x0, y0, x1, y1: gray[y0:y1, x0:x1].tolist()
+    return _find_holes(lambda p2: _circles_cv2(img, upp, cv2, p2), lambda x, y, r: _ring_sample(get, w, h, x, y, r),
+                       (w, h), upp)
+
+
+def _circles_cv2(img, upp, cv2, p2):
+    c = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1.5, int(3.0 / upp), param1=50, param2=p2,
+                         minRadius=int(0.6 / upp), maxRadius=int(0.9 / upp))
+    return [] if c is None else [tuple(float(v) for v in q) for q in c[0]]
+
+
+def _find_holes(circles_at, sample, size, upp):
+    """Hough at falling thresholds; keep real holes; the line that fits a standard tape best wins.
+    A close fit (0.4 mm) ends the search early; a neighbouring tape's line may fit within 1 mm by chance
+    (24 mm at 10.5 mm), the tape's own line fits within ~0.1 mm."""
+    best, best_fit = None, None
     for p2 in (40, 30, 25):
-        c = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1.5, int(3.0 / upp), param1=50, param2=p2,
-                             minRadius=int(0.6 / upp), maxRadius=int(0.9 / upp))
-        found = hole_line([] if c is None else [tuple(float(v) for v in q) for q in c[0]], upp)
-        if found:
-            return found
-    return None
+        line = choose_line(hole_lines(real_holes(circles_at(p2), sample), upp), size, upp)
+        if line is None:
+            continue
+        fit = line_fit(line, size, upp)
+        if best is None or fit < best_fit:
+            best, best_fit = line, fit
+        if fit <= 0.4:
+            break
+    return best
 
 
 def holes_java(image, upp):
-    """Sprocket holes in a BufferedImage with OpenPnP's OpenCV (same parameters as holes_cv2)."""
+    """Sprocket holes in a BufferedImage with OpenPnP's OpenCV (same method as holes_cv2)."""
     _ensure_opencv()
     from org.opencv.core import Mat, Size
     from org.opencv.imgproc import Imgproc
     from org.openpnp.util import OpenCvUtils
     import jarray
     mat = OpenCvUtils.toMat(image)
+    gray = Mat()
+    Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
     g = Mat()
-    Imgproc.cvtColor(mat, g, Imgproc.COLOR_BGR2GRAY)
-    Imgproc.createCLAHE(3.0, Size(8, 8)).apply(g, g)
+    Imgproc.createCLAHE(3.0, Size(8, 8)).apply(gray, g)
     Imgproc.GaussianBlur(g, g, Size(9, 9), 2)
-    for p2 in (40, 30, 25):
+    w, h = gray.cols(), gray.rows()
+
+    def circles_at(p2):
         c = Mat()
         Imgproc.HoughCircles(g, c, Imgproc.HOUGH_GRADIENT, 1.5, int(3.0 / upp), 50, p2, int(0.6 / upp), int(0.9 / upp))
-        circles = []
-        if not c.empty():
-            a = jarray.zeros(c.cols() * 3, "f")
-            c.get(0, 0, a)
-            circles = [(a[i], a[i + 1], a[i + 2]) for i in range(0, len(a), 3)]
-        found = hole_line(circles, upp)
-        if found:
-            return found
-    return None
+        if c.empty():
+            return []
+        a = jarray.zeros(c.cols() * 3, "f")
+        c.get(0, 0, a)
+        return [(a[i], a[i + 1], a[i + 2]) for i in range(0, len(a), 3)]
+
+    def get(x0, y0, x1, y1):
+        n = x1 - x0
+        buf = jarray.zeros(n, "b")
+        rows = []
+        for y in range(y0, y1):
+            gray.get(y, x0, buf)
+            rows.append([v & 0xFF for v in buf])
+        return rows
+    return _find_holes(circles_at, lambda x, y, r: _ring_sample(get, w, h, x, y, r), (w, h), upp)
