@@ -13,6 +13,7 @@ from java.awt import BasicStroke, BorderLayout, Color, Dimension, FlowLayout, Fo
 from java.awt.event import MouseAdapter
 from java.awt.geom import AffineTransform, Point2D
 from java.awt.image import BufferedImage
+from java.lang import System
 from javax.swing import JButton, JEditorPane, JFrame, JPanel, JScrollPane, SwingUtilities, WindowConstants
 
 HINT = u"wheel: zoom in / out \u00b7 drag: move \u00b7 right click: fit"
@@ -129,6 +130,7 @@ class ImageView(JPanel):
         self.setPreferredSize(Dimension(size[0], size[1]))
         self.setBackground(Color(40, 40, 40))
         self.zp = ZoomPan(self)
+        self.shrunk = Shrunk()
         view = self
 
         class Click(MouseAdapter):
@@ -170,7 +172,7 @@ class ImageView(JPanel):
             self.zp.apply(graphics)
             g.translate(ox, oy)
             g.scale(s, s)
-            g.drawImage(self.image, 0, 0, None)
+            draw_picture(graphics, self.image, self.shrunk, s * self.zp.scale())
             if self.overlay is not None:
                 self.overlay(graphics, s * self.zp.scale())
             g.setTransform(old)
@@ -187,6 +189,49 @@ def quality(graphics):
     g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
     g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+
+class Shrunk(object):
+    """Smaller copies of a picture for drawing it at less than 1 screen pixel per picture pixel.  Java2D's
+    bicubic / bilinear scaling only looks at the neighbouring pixels, so a 4x smaller drawing skips 3 of 4
+    pixels (jagged, flickering, "worse than the camera view"); halving step by step averages all of them.
+    get(img, k) -> (picture, factor): draw picture scaled by k / factor (between 0.5 and 1 when k < 1)."""
+
+    def __init__(self):
+        self.key, self.levels = None, []
+
+    def get(self, img, k):
+        if img is None or k >= 1.0:
+            return img, 1.0
+        key = System.identityHashCode(img)
+        if key != self.key:
+            self.key, self.levels = key, [img]
+        n, f = 0, 1.0
+        while k / f < 0.5 and self.levels[n].getWidth() > 8 and self.levels[n].getHeight() > 8:
+            if n + 1 >= len(self.levels):
+                self.levels.append(_half(self.levels[n]))
+            n, f = n + 1, f / 2.0
+        return self.levels[n], f
+
+
+def _half(img):
+    w, h = max(1, img.getWidth() // 2), max(1, img.getHeight() // 2)
+    out = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+    g = out.createGraphics()
+    Graphics2D.setRenderingHint(g, RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+    Graphics2D.drawImage(g, img, 0, 0, w, h, None)
+    Graphics2D.dispose(g)
+    return out
+
+
+def draw_picture(graphics, img, shrunk, k):
+    """Draw img at the current origin, scaled by k (screen px per picture px), sharp at any k."""
+    g = _G(graphics)
+    pic, f = shrunk.get(img, k)
+    old = g.getTransform()
+    g.scale(1.0 / f, 1.0 / f)
+    g.drawImage(pic, 0, 0, None)
+    g.setTransform(old)
 
 
 def cross(graphics, x, y, r, colour, k, width=2.0):

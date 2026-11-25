@@ -284,6 +284,13 @@ check("photo: zoomed out, a click on a corner still sets that corner", sq2.dot =
 sq2.zp.wheel(cx, cy, -1)
 check("photo: wheel zooms back in from below the fit", abs(sq2.zp.scale() - 0.125) < 1e-6, sq2.zp.scale())
 render(sq2, "zoom-out-dotsquare.png")
+sh = zoomview.Shrunk()
+big = _BI(1000, 600, _BI.TYPE_INT_RGB)
+pic, f = sh.get(big, 0.2)
+check("sharp shrink: 0.2x is drawn from a 1/4 copy (step-wise halving, not every 5th pixel)",
+      f == 0.25 and pic.getWidth() == 250 and 0.5 <= 0.2 / f <= 1.0, (f, pic.getWidth()))
+check("sharp shrink: 1:1 and larger use the picture itself", sh.get(big, 1.0) == (big, 1.0) and sh.get(big, 3.0)[0] is big)
+check("sharp shrink: copies are kept (no work per repaint)", sh.get(big, 0.2)[0] is pic)
 sq2.zp.reset()
 
 # Feeder Part Check: only the open job's feeders, offset set by hand in the photo
