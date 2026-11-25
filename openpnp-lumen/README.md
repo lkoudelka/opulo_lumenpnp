@@ -43,10 +43,18 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 - It never raises into the job.
 - Without it, *Last Placements* lists the job's placed placements without order.
 
+**Safe homing** (`Events/Startup.py`, installed by `./install.sh`):
+- OpenPnP's *Home* (Machine Controls button, *Machine > Home*, hotkey) sends G28 at once, also with a nozzle down. On the bench, N1 was left at Z 3.2 and Marlin stopped with "Homing Failed" and a kill.
+- With the hook, *Home* first checks:
+  - **homed** (heights known): every nozzle goes to safe Z, and the visual home is checked free of the calibration target. Then it homes. The log names any nozzle that was lowered.
+  - **not homed** (heights unknown: power-up, after a kill or E-stop): a dialog with pictures asks you to confirm by eye that both nozzles are up and level and the target is parked.
+- OpenPnP's button, menu item and hotkey keep their look and enabled state; only what a press does changes. `machine.xml` is not changed. Remove the `Events/Startup.py` link (or `./uninstall.sh`) to go back to plain *Home*. Takes effect at the next OpenPnP start.
+- Why not in G-code: OpenPnP only fills home coordinates into the home command. A `G1 Z..` before `G28` is wrong after a controller reset, when Marlin takes the current position as 0.
+
 ## Install / uninstall
 
 ```
-./install.sh              # menu scripts + the inert hooks Feeder.BeforeFeed, Nozzle.AfterPick (links to this checkout)
+./install.sh              # menu scripts + the inert hooks Feeder.BeforeFeed, Nozzle.AfterPick + safe homing Startup (links)
 ./install.sh --journal    # + placement journal hook (Events/Job.Placement.Complete.py)
 ./uninstall.sh            # removes exactly these links (settings/logs in ~/.openpnp2/lumen stay)
 ```
@@ -276,6 +284,7 @@ lib/lumen/pickvac.py    pick vacuum check (edge pick -> re-centre), Nozzle.After
 lib/lumen/zprobe.py     vacuum contact probing (Board Z Probe)
 lib/lumen/nozzlecal.py  target carry + OpenPnP nozzle offset calibration
 lib/lumen/zoomview.py   zoom in / out / pan for pictures (wheel, drag, right click = fit), like OpenPnP's camera view
+lib/lumen/homeguard.py  safe homing: guard in front of OpenPnP's Home (events/Startup.py)
 lib/lumen/machinecal.py Machine Calibration: Opulo V4.1 steps via OpenPnP's Issues & Solutions, safety rules
 lib/lumen/pictures/     pictures for the manual calibration steps (tools/make_cal_pictures.py)
 lib/lumen/inspect.py    placement inspection (size + golden sample)
