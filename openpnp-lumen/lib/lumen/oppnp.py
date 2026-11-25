@@ -141,6 +141,19 @@ class _Call(Callable):
         return self.fn()
 
 
+_LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def lib_on_path():
+    """Lumen's lib on the CURRENT thread's sys.path.  Jython threads can have their own sys (path, modules):
+    OpenPnP's machine thread may carry the state of another script engine, and a `from lumen import ...` inside
+    a task then fails with "No module named lumen".  (sys imported here: the module-level one is the sys of the
+    thread that first imported this module.)"""
+    import sys as thread_sys
+    if _LIB not in thread_sys.path:
+        thread_sys.path.insert(0, _LIB)
+
+
 def run_machine_task(machine, fn):
     """Run fn() as a machine task (serialised with all other machine activity); blocks the
     calling thread - call from a background thread, never from the Swing thread.
@@ -150,6 +163,7 @@ def run_machine_task(machine, fn):
 
     def wrapped():
         try:
+            lib_on_path()
             box["result"] = fn()
         except (Exception, JavaException) as e:
             box["error"] = e

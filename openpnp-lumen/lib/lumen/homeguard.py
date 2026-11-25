@@ -15,6 +15,16 @@ from __future__ import absolute_import, division, print_function
 import os
 
 _PICTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")
+_LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _lib_on_path():
+    """The guard runs on threads that did not run a Lumen script (Swing thread, OpenPnP's machine thread).  In
+    Jython each thread can have its own sys (path and loaded modules): without this, a later `from lumen import
+    ...` there fails with "No module named lumen" (bench 2026-11-25 15:03, after the nozzles were raised)."""
+    import sys
+    if _LIB not in sys.path:
+        sys.path.insert(0, _LIB)
 
 
 def _log(text):
@@ -62,6 +72,7 @@ def confirm_unhomed(parent, title="Home the machine?", who="OpenPnP"):
 def home_pressed(machine, parent, confirm=None, submit=None, message=None):
     """What a press on Home does (Swing thread).  confirm / submit / message: for tests (defaults: the dialog,
     OpenPnP's UiUtils.submitUiMachineTask, JOptionPane)."""
+    _lib_on_path()
     from lumen import machinecal
     confirm = confirm or confirm_unhomed
     if submit is None:
@@ -79,6 +90,7 @@ def home_pressed(machine, parent, confirm=None, submit=None, message=None):
     low = unsafe_nozzles(machine) if homed else []
 
     def task():
+        _lib_on_path()                                   # OpenPnP's machine thread
         if low:
             _log("nozzle(s) below safe Z before homing, raised first: %s"
                  % ", ".join("%s at Z %.2f" % x for x in low))
