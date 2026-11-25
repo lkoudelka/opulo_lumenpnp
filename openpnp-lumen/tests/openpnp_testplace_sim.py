@@ -375,6 +375,12 @@ try:
     check("first trial: no result yet -> OpenPnP's nozzle tip calibration runs (simulated bottom camera)",
           first[0] == "calibrated" and n1.isCalibrated() and len(_calls) == 1, (first, _calls))
     check("next trial: calibration present -> not run again", second[0] == "present" and len(_calls) == 1, (second, _calls))
+    from java.lang import System as _JS
+    _JS.clearProperty(_tp._session_key(n1, _tip))         # as after an OpenPnP restart: result stored, not this session
+    third = _op.run_machine_task(machine, lambda: _tp.ensure_tip_calibrated(n1, lambda t: _calls.append(t)))
+    check("after a restart: a stored result from before is not trusted -> calibrated again once (bench: N2 / N08)",
+          n1.isCalibrated() and third[0] == "calibrated" and len(_calls) == 2 and "stored result is from before" in _calls[-1],
+          (third, _calls[-1:]))
 except Exception as e:
     check("nozzle tip calibration on the simulated machine", False, e)
 _cal.setEnabled(False)

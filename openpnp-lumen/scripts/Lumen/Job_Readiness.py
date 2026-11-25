@@ -20,13 +20,15 @@ import lumen.helptext
 import lumen.uihelp
 import lumen.jobinfo
 import lumen.feedercheck
+import lumen.lastjob
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.feedercheck)
-from lumen import feedercheck, jobinfo, oppnp, photon
+reload(lumen.lastjob)
+from lumen import feedercheck, jobinfo, lastjob, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
@@ -128,10 +130,13 @@ class Readiness(object):
         self.model.fireTableDataChanged()
         blocking = len([x for x in rows if x["issues"]])
         name = job.getFile().getName() if job and job.getFile() else "(unsaved job)"
-        self.summary.setText("<html><b>%s</b>: %d part type(s), %d placement(s), %d remaining &nbsp; %s</html>" % (
+        zero = lastjob.unplaced_boards(job) if job else []
+        self.summary.setText("<html><b>%s</b>: %d part type(s), %d placement(s), %d remaining &nbsp; %s%s</html>" % (
             name, len(rows), sum(x["total"] for x in rows), sum(x["remaining"] for x in rows),
             "<font color='red'>%d part(s) with issues</font>" % blocking if blocking else
-            "<font color='green'>no blocking issue found</font>"))
+            "<font color='green'>no blocking issue found</font>",
+            "<br><font color='red'>Board %s at X 0 / Y 0: position not set (board added again?) - open the saved job "
+            "(File &gt; Open Recent) or set the board location</font>" % ", ".join(zero) if zero else ""))
 
     # -- camera to the selected line -------------------------------------------------------------
     def selected(self):

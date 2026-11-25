@@ -434,9 +434,9 @@ HELP["orientation_test"] = {
 <p>For a part you are not sure about (mostly bigger, polarised parts: ICs, diodes, LEDs, electrolytics): <b>one</b> part is fed, picked, aligned (bottom vision, as in the job) and placed on
 its real pads, then photographed with the top camera. <b>The board must have NO solder paste</b> on these pads (bare or test
 board): the part is picked up again afterwards.</p>
-<p>Before the first trial with a nozzle tip, OpenPnP's <b>nozzle tip calibration</b> (runout and rotation offset, over
-the bottom camera) runs if the tip has no result yet - as a job does before its first pick. Later trials use the stored
-result. If calibration is switched off for the tip, the photo panel says so in red.</p>
+<p>At the first trial with a nozzle / tip after OpenPnP started, OpenPnP's <b>nozzle tip calibration</b> (runout and
+rotation offset, over the bottom camera) runs for that nozzle - also N2 - even if an older result is stored. Later
+trials in the same session use it. If calibration is switched off for the tip, the photo panel says so in red.</p>
 <p>In the photo: the <b>red dot</b> = pin 1 of the <b>part</b> (click it; preset only when a golden sample of the package
 recognises the turn), the <b>green ring</b> = pin 1 of the <b>board</b> (from CAD; switch the click mode and move it if the
 silkscreen / pad 1 says otherwise). Light pads = CAD pads at the placement rotation (red = pad 1).
@@ -505,7 +505,7 @@ HELP["preflight"] = {
     "title": "Preflight - checklist before a job",
     "html": """
 <p>Runs the checks of ~/.openpnp2/lumen/preflight.json (edit to switch steps on/off or change severity):
-machine enabled, job open, home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
+machine enabled, job open (and no board still at X 0 / Y 0, i.e. added again without its position), home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
 orientation confirmations, optional board Z. Result PASS / WARN / FAIL; it does not start or block the job.</p>
 """ + MOVES % "only <i>home</i> (if the step is on and the machine is not homed).",
     "tips": {

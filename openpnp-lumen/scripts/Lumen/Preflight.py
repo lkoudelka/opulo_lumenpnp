@@ -23,6 +23,7 @@ import lumen.zprobe
 import lumen.nozzlecal
 import lumen.machinecal
 import lumen.homeguard
+import lumen.lastjob
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
@@ -33,7 +34,8 @@ reload(lumen.zprobe)
 reload(lumen.nozzlecal)
 reload(lumen.machinecal)
 reload(lumen.homeguard)
-from lumen import homeguard, jobinfo, machinecal, oppnp, photon
+reload(lumen.lastjob)
+from lumen import homeguard, jobinfo, lastjob, machinecal, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
@@ -90,7 +92,13 @@ def st_machine_enabled(cfg, ctx):
 def st_job_open(cfg, ctx):
     job = gui.getJobTab().getJob()
     n = len(jobinfo.job_placements(job)) if job else 0
-    return n > 0, "%d placement(s) in the job" % n
+    if n == 0:
+        return False, "0 placements in the job"
+    zero = lastjob.unplaced_boards(job)
+    if zero:
+        return False, ("%d placement(s), but board %s at X 0 / Y 0 - position not set (board added again?). Open the "
+                       "saved job (File > Open Recent) or set the board location" % (n, ", ".join(zero)))
+    return True, "%d placement(s) in the job" % n
 
 
 def st_home(cfg, ctx):

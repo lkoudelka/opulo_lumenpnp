@@ -548,8 +548,8 @@ class TestDialog(object):
             lines.append("<font color='red'>Nozzle tip calibration is switched OFF for this tip: runout / rotation offset "
                          "not compensated - the placement can be off</font>")
         elif tc:
-            lines.append("Nozzle tip calibration: %s" % ("done now (first trial with this tip)" if tc == "calibrated"
-                                                          else "present"))
+            lines.append("Nozzle tip calibration: %s" % ("done now (first trial with this nozzle / tip since OpenPnP "
+                                                          "started)" if tc == "calibrated" else "done earlier this session"))
         if tp.off90(st["placement_rot"]) > 1.0:
             lines.append("Placement rotation %.1f deg is not a multiple of 90: the corners are the nearest ones" % st["placement_rot"])
         for w in (r.get("view_warning"), st.get("warning")):

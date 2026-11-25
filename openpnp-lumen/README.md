@@ -51,6 +51,11 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 - OpenPnP's button, menu item and hotkey keep their look and enabled state; only what a press does changes. `machine.xml` is not changed. Remove the `Events/Startup.py` link (or `./uninstall.sh`) to go back to plain *Home*. Takes effect at the next OpenPnP start.
 - Why not in G-code: OpenPnP only fills home coordinates into the home command. A `G1 Z..` before `G28` is wrong after a controller reset, when Marlin takes the current position as 0.
 
+**Board positions live in the job** (`Events/Startup.py`, `lib/lumen/lastjob.py`):
+- OpenPnP starts with an empty job. Adding the board file again (*Add Board*) creates a new board at X 0 / Y 0 / Z 0 / 0 deg. The position set before is in the saved `.job.xml`.
+- At start-up, if the job is empty and the last job file (*File > Open Recent*) exists, a question offers to reopen it. *Yes* opens it as *File > Open Job* would.
+- Preflight (*job open*) fails, and Job Readiness shows a red line, when an enabled board is still at X 0 / Y 0.
+
 ## Install / uninstall
 
 ```
@@ -285,6 +290,7 @@ lib/lumen/zprobe.py     vacuum contact probing (Board Z Probe)
 lib/lumen/nozzlecal.py  target carry + OpenPnP nozzle offset calibration
 lib/lumen/zoomview.py   zoom in / out / pan for pictures (wheel, drag, right click = fit), like OpenPnP's camera view
 lib/lumen/homeguard.py  safe homing: guard in front of OpenPnP's Home (events/Startup.py)
+lib/lumen/lastjob.py    start-up offer to reopen the last job; boards still at X 0 / Y 0
 lib/lumen/machinecal.py Machine Calibration: Opulo V4.1 steps via OpenPnP's Issues & Solutions, safety rules
 lib/lumen/pictures/     pictures for the manual calibration steps (tools/make_cal_pictures.py)
 lib/lumen/inspect.py    placement inspection (size + golden sample)

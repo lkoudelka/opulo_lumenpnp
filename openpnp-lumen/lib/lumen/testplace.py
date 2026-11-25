@@ -280,28 +280,44 @@ def _give_back(feeder, nozzle):
     return "discarded (%s)" % why
 
 
+def _session_key(nozzle, tip):
+    return "lumen.tipcal.%s.%s" % (nozzle.getId(), tip.getId())
+
+
+def tip_calibrated_this_session(nozzle, tip):
+    """Time (HH:MM:SS) this nozzle / tip pair was calibrated by a test placement since OpenPnP started, or None.
+    Kept as a JVM property: survives Scripts > Refresh Scripts (module reload), not a restart."""
+    from java.lang import System
+    return System.getProperty(_session_key(nozzle, tip))
+
+
 def ensure_tip_calibrated(nozzle, log=print):
-    """OpenPnP's nozzle tip calibration (runout and rotation offset, bottom camera) for the tip on this nozzle -
-    only when there is no result yet, as OpenPnP's job does before its first pick (CalibrateNozzleTips).  The result
-    stays (OpenPnP keeps it until its recalibration trigger), so later trials do not calibrate again.
-    Returns (state, text): "present" / "calibrated" / "disabled".  Call inside a machine task, nozzle empty."""
+    """OpenPnP's nozzle tip calibration (runout and rotation offset, bottom camera) for the tip on this nozzle:
+    ONCE per OpenPnP session, at the first test placement with that nozzle / tip; later trials use the result.
+    A result stored from before this start is not trusted (bench 2026-11-25: N2 / N08 had one from before the
+    nozzle offsets were re-calibrated, so the trials skipped it).
+    Returns (state, text): "present" (this session) / "calibrated" / "disabled".  Machine task, nozzle empty."""
     tip = nozzle.getNozzleTip()
     if tip is None:
         raise TestError("no nozzle tip loaded on %s" % nozzle.getName(), "nothing moved")
     name = "%s on %s" % (tip.getName(), nozzle.getName())
-    if nozzle.isCalibrated():
-        return "present", "nozzle tip %s: calibration present (runout / rotation offset compensated)" % name
+    when = tip_calibrated_this_session(nozzle, tip)
+    if when and nozzle.isCalibrated():
+        return "present", "nozzle tip %s: calibrated this session at %s (runout / rotation offset)" % (name, when)
     cal = tip.getCalibration() if hasattr(tip, "getCalibration") else None
     if cal is None or not cal.isEnabled():
         return "disabled", ("nozzle tip %s: calibration is switched OFF in OpenPnP (nozzle tip > Calibration): runout / "
                             "rotation offset NOT compensated, the placement can be off" % name)
-    log("calibrating nozzle tip %s (bottom camera, once) ..." % name)
+    log("calibrating nozzle tip %s (bottom camera, first test placement since OpenPnP started%s) ..." % (
+        name, "; the stored result is from before" if nozzle.isCalibrated() else ""))
     try:
         nozzle.calibrate()
     except _errors() as e:
         raise TestError("nozzle tip calibration of %s failed: %s" % (name, e), "nothing picked")
     if not nozzle.isCalibrated():
         raise TestError("nozzle tip calibration of %s gave no result" % name, "nothing picked")
+    from java.lang import System
+    System.setProperty(_session_key(nozzle, tip), time.strftime("%H:%M:%S"))
     return "calibrated", "nozzle tip %s: calibrated now (runout / rotation offset)" % name
 
 
