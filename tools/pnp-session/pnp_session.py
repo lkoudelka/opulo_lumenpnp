@@ -136,8 +136,16 @@ def usb_devices():
 
 # ---- session handling ------------------------------------------------------------
 def current():
+    """The running session's folder, or None.  A 'current' link whose folder was deleted is cleared (with a
+    note) instead of blocking start / crashing stop."""
     if CURRENT.is_symlink() or CURRENT.exists():
-        return CURRENT.resolve()
+        sdir = CURRENT.resolve()
+        if (sdir / "session.json").is_file():
+            return sdir
+        print(f"note: the running session {sdir} no longer exists (folder deleted) - cleared; its notes / logs are "
+              f"gone, the OpenPnP logs are still in {OPENPNP / 'log'}",
+              file=sys.stderr)
+        CURRENT.unlink()
     return None
 
 
