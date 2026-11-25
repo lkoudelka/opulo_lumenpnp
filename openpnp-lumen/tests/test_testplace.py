@@ -68,6 +68,9 @@ check("body far away -> nominal", tp.pickback_correction({"found": True, "dx": 0
 check("body turned a lot -> offset only", tp.pickback_correction({"found": True, "dx": 0.1, "dy": 0, "angle_err": 40})[2] == 0)
 check("no body -> nominal", tp.pickback_correction({"found": False})[:3] == (0, 0, 0)
       and tp.pickback_correction(None)[:3] == (0, 0, 0))
+check("no body search (package without size) -> the log says why, not 'not found'",
+      "body size unknown" in tp.pickback_correction({"found": False, "why": "body not searched: body size unknown "
+                                                     "(set the package footprint body)"})[3])
 x, y, r = tp.pickback_location((10.3, 20.0, 90.0), (10.0, 20.0), 0.1, 0.0, 90.0)
 check("pick-back orbits the part centre: nozzle 0.3 mm right of the part, part turned +90 -> nozzle 0.3 mm above",
       abs(x - 10.1) < 1e-9 and abs(y - 20.3) < 1e-9 and r == 180.0, (x, y, r))

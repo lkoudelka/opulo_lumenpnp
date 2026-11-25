@@ -130,7 +130,8 @@ def pickback_correction(body, limits=None):
     search), so the nozzle picks it back in the same grip it was placed with."""
     lim = limits or LIMITS
     if not body or not body.get("found"):
-        return 0.0, 0.0, 0.0, "body not found in the photo: pick back at the place location"
+        why = (body or {}).get("why") or "body not found in the photo"
+        return 0.0, 0.0, 0.0, "%s: pick back at the place location" % why
     d = math.hypot(body["dx"], body["dy"])
     if d > lim["pickback_mm"]:
         return 0.0, 0.0, 0.0, "body found %.2f mm away (> %.2f): not trusted, pick back at the place location" % (
@@ -369,6 +370,8 @@ def photo(machine, bl, pl, st, golden_root=None, save_dir=None):
             res["body"] = ins.find_body(img, upp, length, width, axis)
         except _errors() as e:                              # shown; the user still judges
             res["body"] = {"found": False, "why": "body search failed: %s" % e}
+    else:                                                   # e.g. a package without body size or pads
+        res["body"] = {"found": False, "why": "body not searched: %s" % src}
     g = ins.load_golden(golden_root, str(pkg.getId())) if golden_root and pkg is not None else None
     if g is not None:
         try:
