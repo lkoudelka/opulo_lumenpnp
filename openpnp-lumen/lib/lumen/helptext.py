@@ -505,7 +505,7 @@ HELP["preflight"] = {
     "title": "Preflight - checklist before a job",
     "html": """
 <p>Runs the checks of ~/.openpnp2/lumen/preflight.json (edit to switch steps on/off or change severity):
-machine enabled, job open, home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
+machine enabled, job open (and no board still at X 0 / Y 0, i.e. added again without its position), home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
 orientation confirmations, optional board Z. Result PASS / WARN / FAIL; it does not start or block the job.</p>
 """ + MOVES % "only <i>home</i> (if the step is on and the machine is not homed).",
     "tips": {
