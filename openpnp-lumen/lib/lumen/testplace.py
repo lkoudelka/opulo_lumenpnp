@@ -280,6 +280,31 @@ def _give_back(feeder, nozzle):
     return "discarded (%s)" % why
 
 
+def ensure_tip_calibrated(nozzle, log=print):
+    """OpenPnP's nozzle tip calibration (runout and rotation offset, bottom camera) for the tip on this nozzle -
+    only when there is no result yet, as OpenPnP's job does before its first pick (CalibrateNozzleTips).  The result
+    stays (OpenPnP keeps it until its recalibration trigger), so later trials do not calibrate again.
+    Returns (state, text): "present" / "calibrated" / "disabled".  Call inside a machine task, nozzle empty."""
+    tip = nozzle.getNozzleTip()
+    if tip is None:
+        raise TestError("no nozzle tip loaded on %s" % nozzle.getName(), "nothing moved")
+    name = "%s on %s" % (tip.getName(), nozzle.getName())
+    if nozzle.isCalibrated():
+        return "present", "nozzle tip %s: calibration present (runout / rotation offset compensated)" % name
+    cal = tip.getCalibration() if hasattr(tip, "getCalibration") else None
+    if cal is None or not cal.isEnabled():
+        return "disabled", ("nozzle tip %s: calibration is switched OFF in OpenPnP (nozzle tip > Calibration): runout / "
+                            "rotation offset NOT compensated, the placement can be off" % name)
+    log("calibrating nozzle tip %s (bottom camera, once) ..." % name)
+    try:
+        nozzle.calibrate()
+    except _errors() as e:
+        raise TestError("nozzle tip calibration of %s failed: %s" % (name, e), "nothing picked")
+    if not nozzle.isCalibrated():
+        raise TestError("nozzle tip calibration of %s gave no result" % name, "nothing picked")
+    return "calibrated", "nozzle tip %s: calibrated now (runout / rotation offset)" % name
+
+
 def run_test(machine, bl, pl, feeder, nozzle, align=True, log=print):
     """Feed, pick, align, place on the board (no paste), nozzle up.  Returns the state for photo() and
     recycle().  On an error before the place, the part is given back to the feeder (or discarded)."""
@@ -295,6 +320,8 @@ def run_test(machine, bl, pl, feeder, nozzle, align=True, log=print):
         nozzle.moveToSafeZ()
         if not nozzle.isPartOff():
             raise TestError("vacuum says nozzle %s is not empty - check it" % nozzle.getName(), "nothing moved")
+    st["tip_calibration"], text = ensure_tip_calibrated(nozzle, log)
+    log("test placement %s: %s" % (st["ref"], text))
     st["count_before"] = feeder.getFeedCount() if hasattr(feeder, "getFeedCount") else None
     feeder.feed(nozzle)
     log("test placement %s (%s): fed %s" % (st["ref"], st["part"], feeder.getName()))
