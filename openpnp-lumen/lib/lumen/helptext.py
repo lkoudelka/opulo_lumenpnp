@@ -434,6 +434,9 @@ HELP["orientation_test"] = {
 <p>For a part you are not sure about (mostly bigger, polarised parts: ICs, diodes, LEDs, electrolytics): <b>one</b> part is fed, picked, aligned (bottom vision, as in the job) and placed on
 its real pads, then photographed with the top camera. <b>The board must have NO solder paste</b> on these pads (bare or test
 board): the part is picked up again afterwards.</p>
+<p>Before the first trial with a nozzle tip, OpenPnP's <b>nozzle tip calibration</b> (runout and rotation offset, over
+the bottom camera) runs if the tip has no result yet - as a job does before its first pick. Later trials use the stored
+result. If calibration is switched off for the tip, the photo panel says so in red.</p>
 <p>In the photo: the <b>red dot</b> = pin 1 of the <b>part</b> (click it; preset only when a golden sample of the package
 recognises the turn), the <b>green ring</b> = pin 1 of the <b>board</b> (from CAD; switch the click mode and move it if the
 silkscreen / pad 1 says otherwise). Light pads = CAD pads at the placement rotation (red = pad 1).

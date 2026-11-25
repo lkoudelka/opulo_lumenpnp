@@ -477,7 +477,7 @@ class TestDialog(object):
         if JOptionPane.showConfirmDialog(self.frame, msg, "Test placement", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
             return False
         self.busy = True
-        self.result.setText("Running: feed, pick, align, place, photo ...")
+        self.result.setText("Running: nozzle tip calibration (only if missing), feed, pick, align, place, photo ...")
         self.update()
         golden_root = os.path.join(oppnp.lumen_dir(scripting), "inspection")
         save = os.path.join(oppnp.lumen_dir(scripting), "testplace")
@@ -543,6 +543,13 @@ class TestDialog(object):
         else:
             lines.append("Body: size unknown (%s)" % r.get("size_source"))
         lines.append("Camera: " + r["proposal_why"] + ("" if r.get("proposal") is None else " - preset, check it"))
+        tc = st.get("tip_calibration")
+        if tc == "disabled":
+            lines.append("<font color='red'>Nozzle tip calibration is switched OFF for this tip: runout / rotation offset "
+                         "not compensated - the placement can be off</font>")
+        elif tc:
+            lines.append("Nozzle tip calibration: %s" % ("done now (first trial with this tip)" if tc == "calibrated"
+                                                          else "present"))
         if tp.off90(st["placement_rot"]) > 1.0:
             lines.append("Placement rotation %.1f deg is not a multiple of 90: the corners are the nearest ones" % st["placement_rot"])
         for w in (r.get("view_warning"), st.get("warning")):

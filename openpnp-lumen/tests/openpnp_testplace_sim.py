@@ -245,6 +245,9 @@ st = dlg.state
 check("test ran: placed on the board, nozzle empty, photo taken", ok and st is not None and st["on_board"] and n1.getPart() is None
       and dlg.res is not None and dlg.res.get("crop") is not None, (st and {k: v for k, v in st.items() if not k.startswith("_")},
                                                                      FakeOptionPane.messages[-1:]))
+_Sys.out.println("  tip calibration state: %s" % st.get("tip_calibration"))
+check("nozzle tip calibration checked before the feed (present / calibrated now / disabled reported)",
+      st.get("tip_calibration") in ("present", "calibrated", "disabled"), st.get("tip_calibration"))
 check("Photon feed consumed the SkipNext (no tape move) -> Normal", ph.getFeedOptions().name() == "Normal", ph.getFeedOptions())
 at = st["_at"].convertToUnits(mm)
 check("nozzle placed at the board placement (board 50/50 + U1 10/10, rotation 90)", abs(at.getX() - 60) < 1e-6
@@ -357,6 +360,24 @@ else:
     check("with alignment: failure reported with where the part is, nozzle empty, Photon not left fed",
           "stopped" in msg and "The part:" in msg and n1.getPart() is None, msg)
     _Sys.out.println("    (simulated bottom vision: %s)" % msg.replace("\n", " | "))
+
+_Sys.out.println("nozzle tip calibration: once, then the stored result (as OpenPnP's job)")
+from lumen import testplace as _tp
+_tip = n1.getNozzleTip()
+_cal = _tip.getCalibration()
+_cal.setEnabled(True)
+_cal.resetAll() if hasattr(_cal, "resetAll") else None
+_calls = []
+try:
+    first = _op.run_machine_task(machine, lambda: _tp.ensure_tip_calibrated(n1, lambda t: _calls.append(t)))
+    second = _op.run_machine_task(machine, lambda: _tp.ensure_tip_calibrated(n1, lambda t: _calls.append(t)))
+    _Sys.out.println("  first: %s / second: %s" % (first, second))
+    check("first trial: no result yet -> OpenPnP's nozzle tip calibration runs (simulated bottom camera)",
+          first[0] == "calibrated" and n1.isCalibrated() and len(_calls) == 1, (first, _calls))
+    check("next trial: calibration present -> not run again", second[0] == "present" and len(_calls) == 1, (second, _calls))
+except Exception as e:
+    check("nozzle tip calibration on the simulated machine", False, e)
+_cal.setEnabled(False)
 
 _Sys.out.println("%d of %d checks passed" % (sum(results), len(results)))
 if os.environ.get("PNG_KEEP"):
