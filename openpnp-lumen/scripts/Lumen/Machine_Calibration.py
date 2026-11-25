@@ -134,8 +134,10 @@ class MachineCal(object):
         opts.add(self.opt_box)
         self.pause_box = JCheckBox("pause for my check before every Accept", self.settings.get("machine_cal_pause", False))
         opts.add(self.pause_box)
-        opts.add(JLabel("Bottom camera tip:"))
+        self.swap_box = JCheckBox("swap N1 tip for the bottom camera to:", self.settings.get("machine_cal_swap", False))
+        opts.add(self.swap_box)
         self.tip = JTextField(self.settings.get("machine_cal_tip", "N08"), 5)
+        self.tip.setToolTipText(lumen.uihelp._html(lumen.helptext.HELP["machine_cal"]["tips"]["swap N1 tip"]))
         opts.add(self.tip)
         park = self.settings.get("target_park", list(machinecal.DEFAULT_PARK))
         opts.add(JLabel("Target park X/Y:"))
@@ -293,11 +295,12 @@ class MachineCal(object):
             raise ValueError("target park X/Y must be numbers")
         o = {"z_method": "hand" if self.zm.getSelectedIndex() == 1 else "probe",
              "optional": self.opt_box.isSelected(), "pause_each": self.pause_box.isSelected(),
-             "bottom_tip": self.tip.getText().strip() or "N08", "park": park}
+             "swap_tip": self.swap_box.isSelected(), "bottom_tip": self.tip.getText().strip() or "N08", "park": park}
         self.settings.set("machine_cal_z", o["z_method"])
         self.settings.set("machine_cal_optional", o["optional"])
         self.settings.set("machine_cal_pause", o["pause_each"])
         self.settings.set("machine_cal_tip", o["bottom_tip"])
+        self.settings.set("machine_cal_swap", o["swap_tip"])
         self.settings.set("target_park", list(park))
         return o
 

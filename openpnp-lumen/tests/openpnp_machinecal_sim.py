@@ -261,7 +261,8 @@ nozzlecal.calibrate_openpnp = fake_precise
 # ------------------------------------------------------------------ full run
 ui = UI({"Calibration target on the visual home": "Done", "Change the nozzle tip by hand": "Done",
          "Save the configuration?": "Save", "visual check": "accept"})
-opts = {"z_method": "probe", "optional": True, "pause_each": False, "bottom_tip": "N08", "park": (100.0, 100.0)}
+opts = {"z_method": "probe", "optional": True, "pause_each": False, "swap_tip": True, "bottom_tip": "N08",
+        "park": (100.0, 100.0)}
 cal = Cal(machine, ui, opts, os.path.join(sandbox, "lumen"))
 cal.det_wrong = {"secondary": True}
 mxml = os.path.join(sandbox, "machine.xml")
@@ -369,6 +370,19 @@ cal6 = Cal(machine, UI({"Change the nozzle tip by hand": "Done"}), opts, os.path
 r = cal6.run("tips_back")
 check("after a restart between bottom camera and 'tips back' the tips before are still known",
       n1.getNozzleTip() == nt1 and r.startswith("loaded"), r)
+
+# no swap (default): the bottom camera step uses the tip on N1, nobody is asked to change a tip
+log[:] = []
+ui7 = UI({"visual check": "accept"})
+o7 = dict(opts)
+o7["swap_tip"] = False
+cal7 = Cal(machine, ui7, o7, os.path.join(sandbox, "lumen"))
+r = cal7.run("bottom_cam")
+acc7 = [l for l in log if l[0] == "accept" and l[1] == "bottom"]
+check("no swap (default): bottom camera with the tip on N1, no tip change asked",
+      acc7 and acc7[0][6] == nt1.getName() and n1.getNozzleTip() == nt1
+      and not any(q[0].startswith("Change the nozzle tip") for q in ui7.asked), (r, acc7, ui7.asked))
+check("no swap: 'tips back' has nothing to do", cal7.run("tips_back") == "tips already as before")
 
 _Sys.out.println("%d/%d passed" % (sum(results), len(results)))
 machine.setEnabled(False)

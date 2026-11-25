@@ -508,7 +508,8 @@ carries the calibration target, and checks every result.</p>
 <li>Primary and secondary <b>fiducial</b> (camera only).</li>
 <li><b>Nozzle offsets</b> N1 primary / secondary, N2 primary: the touching Z by <b>vacuum contact</b> (slow 0.05 mm
 steps, stops at the first contact, max 2.5 mm) or jogged by you.</li>
-<li><b>Bottom camera</b> with the N08 tip ("use nozzle Z", never auto focus), then homing method + homing fiducial.</li>
+<li><b>Bottom camera</b> with the tip on N1 ("use nozzle Z", never auto focus), then homing method + homing fiducial.
+The Opulo guide swaps to N08 first; tick <i>swap</i> for that, otherwise no tip is changed.</li>
 <li>Tips back, <b>precise offsets</b> with the calibration target, <b>camera settling</b>, optional <b>backlash</b> X/Y.</li>
 <li><b>Prepare for homing</b> (runout calibration on tip change), <b>home and verify</b>, save (you confirm).</li>
 </ol>
@@ -523,8 +524,9 @@ home</b>; the tool checks it with the camera before every homing. The backup is 
                        "and stops when the open tip is sealed) or jogged by you, as in the Opulo guide.",
         "optional steps": "Also run the optional backlash calibration for X and Y (OpenPnP, up to 15 minutes each).",
         "pause for my check": "Stop before every OpenPnP Accept so you can check the camera view or the nozzle by eye.",
-        "Bottom camera tip:": "Nozzle tip loaded on N1 for the bottom camera step (Opulo guide: N08). The tips that were on "
-                              "the nozzles before are loaded again afterwards.",
+        "swap N1 tip": "Off (default): the bottom camera step uses the tip that is on N1, no tip change. On: N1 gets this "
+                       "tip first (Opulo guide: N08), by hand with a picture, and the tips from before are loaded again "
+                       "after the step.",
         "Target park X/Y:": "Where the calibration target normally lies (mm). It is taken from here and always returned here.",
         "Run all from the selected step": "Run the selected step and all after it, in the guide's order.",
         "Run the selected step only": "Run only the selected step (for example to repeat one).",
