@@ -160,6 +160,25 @@ def run_machine_task(machine, fn):
     return box.get("result")
 
 
+CAL_SPEED = 0.5             # OpenPnP machine speed for the calibration tools (restored afterwards)
+
+
+def at_speed(machine, speed, fn, log=print):
+    """Run fn() with OpenPnP's machine speed at most `speed` (0..1), then put the previous speed back (also when
+    fn fails).  Never faster than the person had set.  Any thread: moves that start after it use the speed."""
+    old = machine.getSpeed()
+    new = min(old, speed)
+    if new != old:
+        machine.setSpeed(new)
+        log("machine speed %d %% -> %d %% for the calibration" % (round(old * 100), round(new * 100)))
+    try:
+        return fn()
+    finally:
+        if machine.getSpeed() != old:
+            machine.setSpeed(old)
+            log("machine speed back to %d %%" % round(old * 100))
+
+
 def in_background(fn):
     class _R(Runnable):
         def run(self):

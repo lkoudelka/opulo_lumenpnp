@@ -155,6 +155,36 @@ for script, key in TOOLS:
         check("calibration question shows its picture and buttons", btns == ["Done", "Cancel"] and len(pics) == 1, (btns, len(pics)))
         render(content, "machine_cal-ask.png")
         obj.show_step()
+        # a run goes at 50 % machine speed, the previous speed comes back afterwards (worker of the real script)
+        speeds = []
+
+        class _Cal(object):
+            opt = None
+
+            def run(self, k):
+                speeds.append(machine.getSpeed())
+                return "ok"
+        g_mc = g
+        _orig_cr, _orig_rmt = g_mc["oppnp"].confirm_ready, g_mc["oppnp"].run_machine_task
+        g_mc["oppnp"].confirm_ready = lambda *a: True
+        g_mc["oppnp"].run_machine_task = lambda m, fn: None              # the final safe Z move: no motion offline
+        obj.cal = _Cal()
+        _homed0, _speed0 = machine.isHomed(), machine.getSpeed()
+        machine.setHomed(True)
+        machine.setSpeed(0.98)
+        last = len(g_mc["machinecal"].STEPS) - 1
+        obj.table.setRowSelectionInterval(last, last)
+        obj.start(False)
+        import time as _t
+        _end = _t.time() + 20
+        while obj.busy and _t.time() < _end:
+            _t.sleep(0.05)
+        check("machine calibration: a step runs at 50 % speed, 98 % restored after the run",
+              speeds == [0.5] and abs(machine.getSpeed() - 0.98) < 1e-9, (speeds, machine.getSpeed()))
+        machine.setHomed(_homed0)
+        machine.setSpeed(_speed0)
+        obj.cal = None
+        g_mc["oppnp"].confirm_ready, g_mc["oppnp"].run_machine_task = _orig_cr, _orig_rmt
     if script == "Feeder_Part_Check.py":
         render(content, "help-%s-closed.png" % key)
         tips = [c.getToolTipText() for c in uihelp._walk(content) if hasattr(c, "getText") and unicode(c.getText()).startswith(u"return fails")]
