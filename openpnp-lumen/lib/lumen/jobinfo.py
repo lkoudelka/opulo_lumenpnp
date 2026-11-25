@@ -27,6 +27,18 @@ def job_placements(job):
     return out
 
 
+def part_placements(job, part_id):
+    """[(boardLocation, placement, placed)] of one part in the job: not yet placed first, job order otherwise."""
+    out = [(bl, pl, placed) for bl, pl, placed in job_placements(job)
+           if (pl.getPart().getId() if pl.getPart() else "(no part: %s)" % pl.getId()) == part_id]
+    return [x for x in out if not x[2]] + [x for x in out if x[2]]
+
+
+def feeders_to_look_at(row):
+    """The row's feeders for the camera: usable ones first, then the others (may lack a location)."""
+    return list(row["enabled_feeders"]) + [f for f in row["feeders"] if f not in row["enabled_feeders"]]
+
+
 def part_height_mm(part):
     try:
         return part.getHeight().convertToUnits(LengthUnit.Millimeters).getValue()

@@ -257,10 +257,15 @@ HELP["job_readiness"] = {
     "title": "Job Readiness - only what the open job needs",
     "html": """
 <p>Parts of the open job with quantity, remaining, part height and feeders, and precisely why a feeder
-cannot be used (no slot, no location, disabled, ...). Read-only.</p>
+cannot be used (no slot, no location, disabled, ...). Read-only towards the job and the configuration.</p>
 <p><i>Show on feeder LEDs</i>: green = needed and ready, red = needed but has an issue, off = not used by the job.</p>
-""" + MOVES % "none (LEDs only).",
+<p><i>Camera to feeder</i> (or double-click a line): the top camera goes over the pick location of the selected
+part's feeder; press again for its next feeder. <i>Camera to next placement</i>: over the part's placements on the
+board, not yet placed ones first; each press goes to the next one. The status line says where the camera is.</p>
+""" + MOVES % "top camera only, at safe Z (Camera to feeder / placement); otherwise none.",
     "tips": {
+        "Camera to feeder": "Top camera over the selected part's feeder (again: its next feeder). Double-click a line does the same.",
+        "Camera to next placement": "Top camera over the selected part's next placement on the board (not yet placed first).",
         "Refresh": "Re-read the job and the feeders.",
         "Show on feeder LEDs": "Light the job's Photon feeders: green ready, red issue, others off.",
         "Feeder LEDs off": "Switch the feeder LEDs off again.",
@@ -431,7 +436,9 @@ recognises the turn), the <b>green ring</b> = pin 1 of the <b>board</b> (from CA
 silkscreen / pad 1 says otherwise). Light pads = CAD pads at the placement rotation (red = pad 1).
 Same corners -> CORRECT. Different -> the feeder rotation that would have been right is shown.</p>
 <p><b>Zoom the photo like OpenPnP's camera view:</b> mouse wheel = zoom in / out at the pointer, drag = move the zoomed
-photo, right click = fit again. Clicks set the marks at the zoomed position.</p>
+photo, right click = fit again. Zooming out below the fit shows the whole camera frame around the part. The photo starts
+at about one screen pixel per camera pixel (as sharp as the camera view); further in, the camera's pixels are
+interpolated. Clicks set the marks at the zoomed position.</p>
 <p><b>Finish</b> picks the part up from the board in the same grip (corrected by where the camera found it) and, by
 <i>After the decision</i>, returns it to its feeder with OpenPnP's take-back: <b>Photon: back into its pocket, the next feed
 is skipped</b> (the tape does not move, the job picks this same part); strip / tray feeders: back into its pocket, feed count
