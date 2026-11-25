@@ -35,6 +35,7 @@ import lumen.jobinfo
 import lumen.orientation
 import lumen.inspect
 import lumen.testplace
+import lumen.zoomview
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
@@ -42,6 +43,7 @@ reload(lumen.jobinfo)
 reload(lumen.orientation)
 reload(lumen.inspect)
 reload(lumen.testplace)
+reload(lumen.zoomview)
 from lumen import jobinfo, oppnp
 from lumen import testplace as tp
 from lumen import orientation as ori
@@ -53,7 +55,7 @@ from java.awt.event import MouseAdapter, WindowAdapter
 from java.lang import String
 from javax.swing import (BorderFactory, BoxLayout, ButtonGroup, JButton, JCheckBox, JComboBox, JFileChooser, JFrame, JLabel,
                          JOptionPane, JPanel, JRadioButton, JScrollPane, JTable, JTextArea, ListSelectionModel,
-                         WindowConstants)
+                         WindowConstants, SwingUtilities)
 from javax.swing.filechooser import FileNameExtensionFilter
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 from org.openpnp.model import LengthUnit, Placement
@@ -82,7 +84,9 @@ class _Click(MouseAdapter):
         self.panel = panel
 
     def mouseClicked(self, e):
-        self.panel.click(e.getX(), e.getY())
+        if SwingUtilities.isLeftMouseButton(e):              # right click = fit (zoom), see lumen.zoomview
+            x, y = self.panel.zp.to_view(e.getX(), e.getY())
+            self.panel.click(x, y)
 
 
 class DotSquare(JPanel):
@@ -102,6 +106,7 @@ class DotSquare(JPanel):
         self.setPreferredSize(Dimension(320, 380))
         self.setBackground(Color.WHITE)
         self.addMouseListener(_Click(self))
+        self.zp = lumen.zoomview.ZoomPan(self)           # wheel zoom / drag / right click fit, like the camera view
 
     def geometry(self):
         w, h = self.getWidth(), self.getHeight()
@@ -142,6 +147,9 @@ class DotSquare(JPanel):
         g.setFont(Font(Font.SANS_SERIF, Font.PLAIN, 11))
         g.drawString(self.subtitle, 10, 38)
         x0, y0 = int(cx - s / 2), int(cy - s / 2)
+        old_t = g.getTransform()
+        g.setClip(x0 - int(s * 0.12), y0 - int(s * 0.12), int(s * 1.24), int(s * 1.24))
+        self.zp.apply(graphics)
         if self.image is not None:
             g.drawImage(self.image, x0, y0, int(s), int(s), None)
         else:
@@ -176,6 +184,12 @@ class DotSquare(JPanel):
                 g.setColor(Color(150, 150, 150))
                 g.setStroke(BasicStroke(1))
                 g.drawOval(int(mx - rr), int(my - rr), int(rr * 2), int(rr * 2))
+        g.setTransform(old_t)
+        g.setClip(None)
+        g.setColor(Color(110, 110, 110))
+        g.setFont(Font(Font.SANS_SERIF, Font.PLAIN, 10))
+        g.drawString(self.zp.text(), 10, 52)
+        g.setFont(Font(Font.SANS_SERIF, Font.PLAIN, 11))
         # axes
         ax, ay = 14, int(cy + s / 2 + 34)
         g.setColor(Color(60, 60, 160))

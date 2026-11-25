@@ -18,7 +18,7 @@ def _units():
 def check_feeder(machine, feeder, save_dir=None):
     """Camera to the pick location, capture, analyse.  Call inside a machine task.
     Returns {feeder, pick, pocket_dx, pocket_dy, part_at_pick, parts_visible, pockets, pitch_mm,
-    configured_pitch, image, error}."""
+    configured_pitch, image, upp (mm/px x, y), size (w, h px), error}.  The image centre is the pick location."""
     from org.openpnp.model import Length, Location
     from org.openpnp.util import MovableUtils
     mm = _units()
@@ -39,6 +39,8 @@ def check_feeder(machine, feeder, save_dir=None):
     upp = cam.getUnitsPerPixel(Length(pick.getZ(), mm)).convertToUnits(mm)
     u = upp.getX()
     w, h = img.getWidth(), img.getHeight()
+    res["upp"] = (u, upp.getY())                         # for 'Set offset by hand' (click in the saved photo)
+    res["size"] = (w, h)
     pitch = feeder.getPartPitch() if hasattr(feeder, "getPartPitch") else None
     res["configured_pitch"] = pitch
     # 1. centring from the sprocket holes (any tape: paper, clear, black; any part size)
@@ -111,6 +113,12 @@ def _save(img, r, save_dir, name, holes=None, pocket=None):
     return path
 
 
+def click_offset(ix, iy, size, upp):
+    """Image pixel clicked (the pocket centre) -> (dx, dy) mm from the pick location (= image centre),
+    machine frame (image Y down = machine Y minus)."""
+    return (ix - size[0] / 2.0) * upp[0], -(iy - size[1] / 2.0) * upp[1]
+
+
 def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
     """Move the pick location by (dx, dy) mm (machine frame) onto the pocket centre.  Photon:
     the feeder offset changes (pick = slot location + offset rotated by the slot); the result is
@@ -134,6 +142,19 @@ def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
         feeder.setOffset(old)
         raise RuntimeError("offset did not move the pick location as intended (reverted)")
     return before, after
+
+
+def look(machine, feeder):
+    """Top camera over the pick location, one picture: (image copy, (upp_x, upp_y) mm/px, pick).  The image
+    centre is the pick location.  Camera only.  Call inside a machine task."""
+    from org.openpnp.model import Length, LengthUnit
+    from lumen import zoomview
+    mm = LengthUnit.Millimeters
+    pick = go_to(machine, feeder)
+    cam = machine.getDefaultHead().getDefaultCamera()
+    img = zoomview.copy_image(cam.settleAndCapture())
+    u = cam.getUnitsPerPixel(Length(pick.getZ(), mm)).convertToUnits(mm)
+    return img, (u.getX(), u.getY()), pick
 
 
 def go_to(machine, feeder):

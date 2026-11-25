@@ -14,6 +14,7 @@
 from __future__ import absolute_import, division, print_function
 
 import json
+import math
 import os
 import sys
 
@@ -26,13 +27,15 @@ import lumen.uihelp
 import lumen.jobinfo
 import lumen.partmatch
 import lumen.feedercheck
+import lumen.zoomview
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.partmatch)
 reload(lumen.feedercheck)
-from lumen import feedercheck, jobinfo, oppnp
+reload(lumen.zoomview)
+from lumen import feedercheck, jobinfo, oppnp, zoomview
 from lumen import partmatch as pm
 from lumen.oppnp import JavaException
 
@@ -172,6 +175,7 @@ class FeederAssistant(object):
         fb = JPanel(FlowLayout(FlowLayout.LEFT))
         fb.add(JButton("Choose this feeder for the part", actionPerformed=lambda e: self.choose()))
         fb.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.identify()))
+        fb.add(JButton("Look at this feeder (camera)...", actionPerformed=lambda e: self.look()))
         lower.add(fb, BorderLayout.SOUTH)
         split = JSplitPane(JSplitPane.VERTICAL_SPLIT, sp1, lower)
         split.setResizeWeight(0.5)
@@ -329,6 +333,66 @@ class FeederAssistant(object):
                 oppnp.on_ui(lambda: self.info.setText("%s (address %d) is blinking" % (f.getName(), addr)))
             except (Exception, JavaException) as e:
                 oppnp.on_ui(lambda: self.info.setText("identify failed: %s" % e))
+        oppnp.in_background(work)
+
+    def look(self):
+        """Camera picture of the feeder's pick location, zoomable, next to what the job needs: is this the
+        intended component?  The selected feeder below, or the part's chosen feeder."""
+        from org.openpnp.model import Configuration, Length, LengthUnit
+        x = self.selected_part()
+        i = self.ftable.getSelectedRow()
+        if i >= 0 and not self.fmodel.rows[i].get("sep"):
+            r = self.fmodel.rows[i]
+            f, fdesc = r["feeder"], r["desc"]
+        elif x is not None and x.get("choice") in self.feeders:
+            f, fdesc = self.feeders[x["choice"]], self.fdesc[x["choice"]]
+        else:
+            JOptionPane.showMessageDialog(self.frame, "Select a feeder below (or a part with a chosen feeder).")
+            return
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return
+        part = Configuration.get().getPart(x["id"]) if x is not None else None
+        body = None
+        try:
+            fp = part.getPackage().getFootprint()
+            if fp is not None and fp.getBodyWidth() > 0 and fp.getBodyHeight() > 0:
+                k = Length(1.0, fp.getUnits()).convertToUnits(LengthUnit.Millimeters).getValue()
+                body = (fp.getBodyWidth() * k, fp.getBodyHeight() * k)
+        except (Exception, JavaException):
+            body = None
+
+        def work():
+            try:
+                img, upp, pick = oppnp.run_machine_task(machine, lambda: feedercheck.look(machine, f))
+            except (Exception, JavaException) as e:
+                oppnp.on_ui(lambda: self.info.setText("camera failed: %s" % e))
+                return
+            w, h = img.getWidth(), img.getHeight()
+            rot = pick.getRotation()
+
+            def overlay(g, k):
+                zoomview.cross(g, w / 2.0, h / 2.0, 22, Color.RED, k, 2.5)
+                if body:
+                    from java.awt import BasicStroke, Graphics2D
+                    from java.awt.geom import AffineTransform, Rectangle2D
+                    bw, bh = body[0] / upp[0], body[1] / upp[1]
+                    shape = AffineTransform.getRotateInstance(-math.radians(rot), w / 2.0, h / 2.0).createTransformedShape(
+                        Rectangle2D.Double(w / 2.0 - bw / 2, h / 2.0 - bh / 2, bw, bh))
+                    Graphics2D.setColor(g, Color(255, 215, 0))
+                    Graphics2D.setStroke(g, BasicStroke(float(2.0 / k)))
+                    Graphics2D.draw(g, shape)
+            job = ("<b>Job part:</b> %s (%s), read as %s" % (x["id"], short(x["refs"], 6), pm.summary(x["desc"]))) \
+                if x is not None else "<b>Job part:</b> -"
+            html = ("<b>%s</b>: <b>feeder part</b> %s, read as %s<br>%s<br>"
+                    "Is the component in the pick pocket (red cross) the one the job needs? Zoom in with the mouse wheel "
+                    "and compare marking, size and colour.%s"
+                    % (f.getName(), f.getPart().getId(),
+                       pm.summary(fdesc), job,
+                       (" Yellow: the job part's body %.2f x %.2f mm from its package (orientation approximate)." % body)
+                       if body else " (The job part's package has no body size: no outline.)"))
+            oppnp.on_ui(lambda: zoomview.image_window("Feeder %s - is this the intended component?" % f.getName(),
+                                                      img, html, overlay, None, [], self.frame))
+            oppnp.on_ui(lambda: self.info.setText("camera at the pick location of %s" % f.getName()))
         oppnp.in_background(work)
 
     # -- apply ---------------------------------------------------------------------------------
