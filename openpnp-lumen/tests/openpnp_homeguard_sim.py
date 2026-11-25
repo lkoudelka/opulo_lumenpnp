@@ -72,6 +72,55 @@ check("homed: every nozzle at safe Z when homing started (raised first)",
       rec.at_home and all(z >= safe_low - 1e-6 for _, z in rec.at_home[0]), rec.at_home)
 check("homed again after the guarded Home", machine.isHomed())
 
+# -- OpenPnP runs the task on its machine thread, whose Jython state may not have the Lumen library on its path
+#    (bench 2026-11-25 15:03: "ImportError: No module named lumen" in target_on_visual_home after raising the nozzles)
+from org.python.core import Py, PySystemState
+from java.lang import Thread as _JThread, Runnable as _JRunnable
+
+
+def run_task_fresh_state(task):
+    box = {}
+
+    class _R(_JRunnable):
+        def run(self):
+            Py.setSystemState(PySystemState())          # like a thread whose Python state comes from another engine
+            try:
+                oppnp.run_machine_task(machine, task)
+            except BaseException as e:
+                box["e"] = e
+    t = _JThread(_R())
+    t.start()
+    t.join()
+    if "e" in box:
+        raise box["e"]
+
+
+oppnp.run_machine_task(machine, lambda: n1.moveTo(Location(mm, 50, 50, low_z, 0)))
+rec = Rec(machine)
+try:
+    homeguard.home_pressed(rec, None, confirm=lambda p: True, submit=run_task_fresh_state, message=lambda t: None)
+    err = None
+except BaseException as e:
+    err = e
+check("machine thread without the Lumen path: nozzles raised AND homed (no ImportError)",
+      err is None and len(rec.at_home) == 1 and all(z >= safe_low - 1e-6 for _, z in rec.at_home[0]), (err, rec.at_home))
+
+box2 = {}
+
+
+class _R2(_JRunnable):
+    def run(self):
+        Py.setSystemState(PySystemState())
+        try:
+            box2["r"] = oppnp.run_machine_task(machine, lambda: __import__("lumen.nozzlecal").nozzlecal.__name__)
+        except BaseException as e:
+            box2["e"] = e
+_t2 = _JThread(_R2())
+_t2.start()
+_t2.join()
+check("any Lumen machine task (oppnp.run_machine_task) imports lumen on a thread without the path",
+      box2.get("r") == "lumen.nozzlecal", box2)
+
 # -- not homed: question first ---------------------------------------------------------------------------------------
 machine.setHomed(False)
 check("not homed: heights unknown -> nothing reported", homeguard.unsafe_nozzles(machine) == [])
