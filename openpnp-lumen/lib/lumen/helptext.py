@@ -493,3 +493,48 @@ orientation confirmations, optional board Z. Result PASS / WARN / FAIL; it does 
     },
     "columns": {"Step": "Check name.", "Result": "PASS / WARN / FAIL / SKIP.", "Detail": "What was found."},
 }
+
+# ---------------------------------------------------------------------------------------
+HELP["machine_cal"] = {
+    "title": "Machine Calibration - the Opulo V4.1 calibration guide, automated",
+    "html": """
+<p>All <b>fundamental</b> and <b>optional</b> calibration steps of the Opulo LumenPnP V4.1 guide
+(Issues &amp; Solutions), in the guide's order. Each calibration is done by <b>OpenPnP's own routine</b> (the same as
+its <i>Accept</i> button); this window does what the guide asks you to do by hand: moves the camera / nozzle to the
+fiducial, measures the touching Z, sets the feature diameter and checks the detection, changes nozzle tips with you,
+carries the calibration target, and checks every result.</p>
+<ol>
+<li><b>Safety check, backup, homing</b>: backup of machine.xml, nozzles to safe Z, visual home free of the target.</li>
+<li>Primary and secondary <b>fiducial</b> (camera only).</li>
+<li><b>Nozzle offsets</b> N1 primary / secondary, N2 primary: the touching Z by <b>vacuum contact</b> (slow 0.05 mm
+steps, stops at the first contact, max 2.5 mm) or jogged by you.</li>
+<li><b>Bottom camera</b> with the N08 tip ("use nozzle Z", never auto focus), then homing method + homing fiducial.</li>
+<li>Tips back, <b>precise offsets</b> with the calibration target, <b>camera settling</b>, optional <b>backlash</b> X/Y.</li>
+<li><b>Prepare for homing</b> (runout calibration on tip change), <b>home and verify</b>, save (you confirm).</li>
+</ol>
+<p>Where your hands are needed (tip change, nothing homed yet, a detection that does not match), the run stops and
+the right side shows what to do with pictures. <b>Never home while the calibration target lies on the visual
+home</b>; the tool checks it with the camera before every homing. The backup is in
+~/.openpnp2/lumen/calibration/. At the end the machine is ready for File &gt; New Job / Import Board.</p>
+""" + MOVES % "homing; camera to the fiducials; nozzles <b>down slowly onto the fiducials</b> (contact probe); N1 over the "
+              "bottom camera; tip change position; <b>pick and place of the calibration target</b>; backlash test moves.",
+    "tips": {
+        "Fiducial Z:": "How the touching Z on the fiducials is found: vacuum contact (the nozzle goes down in 0.05 mm steps "
+                       "and stops when the open tip is sealed) or jogged by you, as in the Opulo guide.",
+        "optional steps": "Also run the optional backlash calibration for X and Y (OpenPnP, up to 15 minutes each).",
+        "pause for my check": "Stop before every OpenPnP Accept so you can check the camera view or the nozzle by eye.",
+        "Bottom camera tip:": "Nozzle tip loaded on N1 for the bottom camera step (Opulo guide: N08). The tips that were on "
+                              "the nozzles before are loaded again afterwards.",
+        "Target park X/Y:": "Where the calibration target normally lies (mm). It is taken from here and always returned here.",
+        "Run all from the selected step": "Run the selected step and all after it, in the guide's order.",
+        "Run the selected step only": "Run only the selected step (for example to repeat one).",
+        "Stop after this step": "Stop after the step that is running now. For an emergency use OpenPnP's stop / disable.",
+        "Clear status": "Forget the done / failed marks (nothing in the machine changes).",
+        "Open the Opulo guide page": "Open the matching page of the Opulo V4.1 guide in the browser (photos of each step).",
+        "Close": "Close the window (a running step is stopped after it ends).",
+    },
+    "columns": {"#": "Order in the Opulo guide.", "Step": "Calibration step.",
+                "Type": "fundamental / optional (Opulo guide) or setup (safety, tips, verification).",
+                "Status": "done / failed / skipped / running (kept between runs).",
+                "Result": "What was measured or changed."},
+}
