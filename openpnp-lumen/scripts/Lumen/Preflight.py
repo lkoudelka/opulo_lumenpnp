@@ -18,19 +18,28 @@ import lumen.oppnp
 import lumen.helptext
 import lumen.uihelp
 import lumen.jobinfo
+import lumen.tapevision
+import lumen.zprobe
+import lumen.nozzlecal
+import lumen.machinecal
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
-from lumen import jobinfo, oppnp, photon
+reload(lumen.tapevision)
+reload(lumen.zprobe)
+reload(lumen.nozzlecal)
+reload(lumen.machinecal)
+from lumen import jobinfo, machinecal, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
 from java.awt import Desktop
 from java.io import File
 from java.lang import String
-from javax.swing import BorderFactory, JButton, JFrame, JLabel, JPanel, JScrollPane, JTable, WindowConstants
+from javax.swing import (BorderFactory, JButton, JFrame, JLabel, JOptionPane, JPanel, JScrollPane, JTable,
+                         WindowConstants)
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 
 DEFAULT = {
@@ -83,10 +92,16 @@ def st_job_open(cfg, ctx):
 
 
 def st_home(cfg, ctx):
+    """Homing with the Lumen safety rules (lumen.machinecal.safe_home): nozzles to safe Z and the visual home
+    checked free of the calibration target; when not homed only after the person confirmed (run())."""
     if machine.isHomed() and cfg.get("mode", "if_needed") == "if_needed":
         return True, "already homed"
-    machine.home()
-    return machine.isHomed(), "homed" if machine.isHomed() else "homing did not complete"
+    if not machine.isHomed() and not ctx.get("home_confirmed"):
+        return None, "skipped: not homed and homing not confirmed"
+    try:
+        return True, machinecal.safe_home(machine, ctx.get("home_confirmed", False))
+    except machinecal.Stop as e:
+        return False, str(e)
 
 
 def st_lights(cfg, ctx):
@@ -214,7 +229,29 @@ def st_orientation(cfg, ctx):
     return not bad and not unchecked, detail
 
 
-STEPS = dict((k[3:], v) for k, v in globals().items() if k.startswith("st_"))
+# explicit: inside OpenPnP's script engine globals() is a Java scope without .items() (bug 2026-11-25)
+STEPS = {"machine_enabled": st_machine_enabled, "job_open": st_job_open, "home": st_home, "lights": st_lights,
+         "nozzle_tips": st_nozzle_tips, "vacuum_sensors": st_vacuum_sensors, "job_readiness": st_job_readiness,
+         "feeder_bus": st_feeder_bus, "board_z": st_board_z, "orientation": st_orientation}
+
+
+def confirm_home(parent):
+    """Not homed: the person confirms nozzles up and level and the calibration target parked (pictures)."""
+    from java.awt import GridLayout
+    from javax.swing import ImageIcon
+    from javax.imageio import ImageIO
+    pics = JPanel(GridLayout(1, 0, 6, 0))
+    for name in ("cal-nozzles-level.png", "cal-home-free.png"):
+        p = os.path.join(_LIB, "lumen", "pictures", name)
+        if os.path.isfile(p):
+            pics.add(JLabel(ImageIcon(ImageIO.read(File(p)))))
+    box = JPanel(BorderLayout(0, 6))
+    box.add(JLabel("<html>The machine is not homed. Before Preflight homes it, check by eye:<br>"
+                   "1. both nozzles are <b>up and level</b>; 2. the <b>calibration target is on its park spot</b>, "
+                   "not on the visual home.<br>Home now?</html>"), BorderLayout.NORTH)
+    box.add(pics, BorderLayout.CENTER)
+    return JOptionPane.showConfirmDialog(parent, box, "Preflight: home the machine?",
+                                         JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION
 
 
 class Model(AbstractTableModel):
@@ -300,8 +337,11 @@ class Preflight(object):
         self.model.fireTableDataChanged()
         self.run_btn.setEnabled(False)
 
+        ctx = {}
+        if machine.isEnabled() and not machine.isHomed() and any(s["id"] == "home" for s in steps):
+            ctx["home_confirmed"] = confirm_home(self.frame)
+
         def work():
-            ctx = {}
             fails = warns = 0
             for i, s in enumerate(steps):
                 fn = STEPS.get(s["id"])

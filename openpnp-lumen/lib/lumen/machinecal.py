@@ -195,6 +195,46 @@ def _xyz(loc):
     return (l.getX(), l.getY(), l.getZ())
 
 
+def visual_home_xy(head):
+    h = head.getHomingFiducialLocation().convertToUnits(_mm())
+    if h.getX() == 0 and h.getY() == 0:
+        h = head.getCalibrationPrimaryFiducialLocation().convertToUnits(_mm())
+    return h.getX(), h.getY()
+
+
+def target_on_visual_home(machine):
+    """Top camera on the visual home: the calibration target seen there, or None.  Machine task, homed."""
+    from lumen import nozzlecal
+    head = machine.getDefaultHead()
+    x, y = visual_home_xy(head)
+    t = head.getCalibrationTestObjectDiameter()
+    dia = t.convertToUnits(_mm()).getValue() if t is not None else 0.0
+    if dia <= 0 or (x == 0 and y == 0):
+        return None                                 # no calibration target / no visual home configured
+    z = head.getCalibrationPrimaryFiducialLocation().convertToUnits(_mm()).getZ()
+    d, _ = nozzlecal.look_disc(machine, x, y, z, dia)
+    return d
+
+
+def safe_home(machine, confirmed_unhomed=False):
+    """Homing with the Lumen safety rules, inside a machine task: homed -> every nozzle to safe Z and the
+    visual home checked free of the calibration target first; not homed -> only if the person confirmed
+    (nozzles up, target parked).  After homing the visual home is checked again.  Returns a detail text,
+    raises Stop."""
+    if machine.isHomed():
+        machine.getDefaultHead().moveToSafeZ()
+        if target_on_visual_home(machine):
+            raise Stop("the camera sees the calibration target on the visual home - put it on its park spot first")
+    elif not confirmed_unhomed:
+        raise Stop("not homed: confirm that the nozzles are up and the calibration target is parked")
+    machine.home()
+    if not machine.isHomed():
+        raise Stop("homing did not complete")
+    if target_on_visual_home(machine):
+        raise Stop("after homing the camera sees the calibration target on the visual home - coordinates may be off")
+    return "homed (nozzles at safe Z, visual home free)"
+
+
 class Stop(Exception):
     """The person cancelled, or a safety check failed: nothing else moves."""
 
@@ -412,10 +452,7 @@ class Calibrator(object):
         return d
 
     def visual_home_xy(self):
-        h = self.head.getHomingFiducialLocation().convertToUnits(_mm())
-        if h.getX() == 0 and h.getY() == 0:
-            h = self.head.getCalibrationPrimaryFiducialLocation().convertToUnits(_mm())
-        return h.getX(), h.getY()
+        return visual_home_xy(self.head)
 
     def ensure_home_free(self):
         """Camera on the visual home: the calibration target must not lie there (homing would use it)."""
