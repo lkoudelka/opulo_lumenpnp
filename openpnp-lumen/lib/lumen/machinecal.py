@@ -68,11 +68,12 @@ STEPS = [
          "N2 goes down slowly onto the fiducial."),
     Step("bottom_cam", "Up-looking (bottom) camera position & initial calibration", "fundamental",
          DOC + "issues-solutions/fundamental/bottom-cam-pos/",
-         "N1 gets the N08 tip, goes over the bottom camera at the primary fiducial Z ('Use nozzle Z', never auto "
-         "focus), Accept: bottom camera position and the tip's vision diameter.  Then homing method "
-         "ResetToFiducialLocation with the homing fiducial = primary fiducial X/Y.",
-         "Tip change position; N1 over the bottom camera, down to the fiducial Z.",
-         "Tip change N045 -> N08 by hand (picture)."),
+         "N1 with the tip it has (default) or, with the option 'swap', the N08 tip as in the Opulo guide, goes over "
+         "the bottom camera at the primary fiducial Z ('Use nozzle Z', never auto focus), Accept: bottom camera "
+         "position and the tip's vision diameter.  Then homing method ResetToFiducialLocation with the homing "
+         "fiducial = primary fiducial X/Y.",
+         "N1 over the bottom camera, down to the fiducial Z (with 'swap': the tip change position first).",
+         "Only with the option 'swap': tip change N045 -> N08 by hand (picture)."),
     Step("tips_back", "Nozzle tips back as before", "setup", DOC + "preflight/nozzle-prep/",
          "Loads the tips that were on the nozzles before the bottom camera step (runout calibration if set).",
          "Tip change position; bottom camera for the runout calibration.", "Tip change by hand (picture)."),
@@ -201,7 +202,8 @@ class Stop(Exception):
 class Calibrator(object):
     """Runs the steps.  ui: say(text), ask(title, html, pictures, buttons) -> pressed button text,
     visual_check(issue, camera, expected_px, reason) -> 'accept' | 'cancel', stop_requested() -> bool.
-    options: z_method 'probe'|'hand', pause_each (bool), optional (bool), park (x, y), bottom_tip ('N08')."""
+    options: z_method 'probe'|'hand', pause_each (bool), optional (bool), park (x, y),
+    swap_tip (bool, default False: the bottom camera step uses the tip on N1), bottom_tip ('N08', used with swap_tip)."""
 
     def __init__(self, machine, ui, options, lumen_dir=None):
         self.machine, self.ui, self.opt = machine, ui, options
@@ -632,10 +634,16 @@ class Calibrator(object):
             return "skipped: no up-looking camera"
         if self.tips_before is None:
             self.remember_tips(False)
-        tip = self.tip_by_name(self.opt.get("bottom_tip", "N08"))
-        if tip is None:
-            raise Stop("nozzle tip %s not found in the configuration" % self.opt.get("bottom_tip", "N08"))
-        self.load_tip(self.n1, tip, False)               # runout calibration needs this step first
+        if self.opt.get("swap_tip"):
+            tip = self.tip_by_name(self.opt.get("bottom_tip", "N08"))
+            if tip is None:
+                raise Stop("nozzle tip %s not found in the configuration" % self.opt.get("bottom_tip", "N08"))
+            self.load_tip(self.n1, tip, False)           # runout calibration needs this step first
+        else:
+            tip = self.n1.getNozzleTip()                 # no swap: the tip N1 has now
+            if tip is None or getattr(tip, "isUnloadedNozzleTipStandin", lambda: False)():
+                raise Stop("N1 has no nozzle tip loaded - load one, or tick 'swap'")
+            self.say("  no tip swap: bottom camera with the tip on N1 (%s)" % tip.getName())
         prim = _xyz(self.head.getCalibrationPrimaryFiducialLocation())
         bx, by, bz = _xyz(self.up.getLocation())
         issue = self.need_issue(issue_title("bottom_cam", camera=self.up.getName()), self.up)
