@@ -122,10 +122,11 @@ def click_offset(ix, iy, size, upp):
 def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
     """Move the pick location by (dx, dy) mm (machine frame) onto the pocket centre.  Photon:
     the feeder offset changes (pick = slot location + offset rotated by the slot); the result is
-    read back and reverted if it does not land where intended.  Returns (old, new) pick."""
+    read back and reverted if it does not land where intended.  Returns (old, new) pick.
+    limit_mm guards the automatic (measured) offset; None = no limit (set by hand, confirmed)."""
     from org.openpnp.model import Location
     mm = _units()
-    if math.hypot(dx, dy) > limit_mm:
+    if limit_mm is not None and math.hypot(dx, dy) > limit_mm:
         raise ValueError("offset %.2f mm larger than %.1f mm: check the feeder by hand" % (math.hypot(dx, dy), limit_mm))
     before = feeder.getPickLocation().convertToUnits(mm)
     target = (before.getX() + dx, before.getY() + dy)
@@ -142,6 +143,33 @@ def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
         feeder.setOffset(old)
         raise RuntimeError("offset did not move the pick location as intended (reverted)")
     return before, after
+
+
+def photo_at(machine, x, y, z):
+    """Top camera to (x, y) at safe Z, one picture: (image copy, (upp_x, upp_y) mm/px at height z).
+    Camera only.  Call inside a machine task."""
+    from org.openpnp.model import Length, LengthUnit, Location
+    from org.openpnp.util import MovableUtils
+    from lumen import zoomview
+    mm = LengthUnit.Millimeters
+    cam = machine.getDefaultHead().getDefaultCamera()
+    MovableUtils.moveToLocationAtSafeZ(cam, Location(mm, x, y, z, 0.0))
+    img = zoomview.copy_image(cam.settleAndCapture())
+    u = cam.getUnitsPerPixel(Length(z, mm)).convertToUnits(mm)
+    return img, (u.getX(), u.getY())
+
+
+def slot_xy(feeder):
+    """(x, y) mm of a Photon feeder's slot location (the rough feeder position captured at set-up), or None."""
+    try:
+        s = feeder.getSlot()
+        loc = s.getLocation() if s is not None else None
+        if loc is None:
+            return None
+        loc = loc.convertToUnits(_units())
+        return loc.getX(), loc.getY()
+    except Exception:
+        return None
 
 
 def look(machine, feeder):

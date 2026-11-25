@@ -593,22 +593,54 @@ class PartCheck(object):
         from javax.imageio import ImageIO
         img = ImageIO.read(File(res["image"]))
         f = x["feeder"]
-        state = {"click": None}
-        size, upp = res["size"], res["upp"]
+        from org.openpnp.model import LengthUnit
+        mm = LengthUnit.Millimeters
+
+        def pick_now():
+            p = f.getPickLocation().convertToUnits(mm)
+            return p.getX(), p.getY(), p.getZ()
+        # where the shown photo was taken (absolute, mm): the check photo is centred on the pick location of that
+        # time.  Offsets count from the pick location NOW, so an Apply followed by another click on the same photo
+        # does not move twice.
+        p0 = res.get("pick") or pick_now()
+        state = {"click": None, "size": res["size"], "upp": res["upp"], "at": (p0[0], p0[1]), "z": p0[2], "busy": False}
+
+        def centre():
+            """Photo centre - pick location now (mm)."""
+            px, py, _ = pick_now()
+            return state["at"][0] - px, state["at"][1] - py
+
+        def pick_px():
+            (w, h), (ux, uy), (cx, cy) = state["size"], state["upp"], centre()
+            return w / 2.0 - cx / ux, h / 2.0 + cy / uy
+
+        def offset():
+            """Offset to apply = clicked point - pick location now (mm, machine frame), or None."""
+            if not state["click"]:
+                return None
+            dx, dy = feedercheck.click_offset(state["click"][0], state["click"][1], state["size"], state["upp"])
+            cx, cy = centre()
+            return cx + dx, cy + dy
 
         def overlay(g, k):
-            zoomview.cross(g, size[0] / 2.0, size[1] / 2.0, 22, Color.RED, k, 2.5)       # pick location now
+            px, py = pick_px()
+            zoomview.cross(g, px, py, 22, Color.RED, k, 2.5)                                 # pick location now
             if state["click"]:
                 zoomview.cross(g, state["click"][0], state["click"][1], 22, Color(30, 144, 255), k, 3.0)
 
         def text():
+            c = centre()
+            moved = abs(c[0]) > 0.005 or abs(c[1]) > 0.005
             base = ("<b>%s</b> (slot %s, part %s): %s<br>Zoom in (mouse wheel), then <b>click the centre of the pick "
-                    "pocket</b>. Red cross = pick location now (image centre), blue = your click."
+                    "pocket</b>. Red cross = pick location now%s, blue = your click. Pocket not in the photo: click "
+                    "towards it and <i>Camera here</i> (new photo there), or <i>Camera to slot location</i>."
                     % (f.getName(), res.get("slot"), f.getPart().getId() if f.getPart() else "-",
-                       x.get("status", "")))
-            if state["click"]:
-                dx, dy = feedercheck.click_offset(state["click"][0], state["click"][1], size, upp)
-                base += "<br><b>Offset to apply: %+.2f / %+.2f mm</b> (%.2f mm)." % (dx, dy, (dx * dx + dy * dy) ** 0.5)
+                       x.get("status", ""), " (outside this photo when not shown)" if moved else " (photo centre)"))
+            if moved:
+                base += "<br>Photo taken %+.2f / %+.2f mm from the pick location now." % c
+            o = offset()
+            if o:
+                base += "<br><b>Offset to apply: %+.2f / %+.2f mm</b> (%.2f mm)." % (o[0], o[1], (o[0] ** 2 + o[1] ** 2) ** 0.5)
             return "<html><body style='font-family:sans-serif;font-size:11pt'>%s</body></html>" % base
 
         def click(ix, iy):
@@ -616,16 +648,63 @@ class PartCheck(object):
             view.info.setText(text())
             view.repaint()
 
+        def photo_to(w, ax, ay, what):
+            """New photo with the camera at (ax, ay) mm; clicks then count from there."""
+            if state["busy"]:
+                return
+            if not oppnp.confirm_ready(machine, gui, w, "Cannot move the camera"):
+                return
+            if not machine.isHomed():
+                JOptionPane.showMessageDialog(w, "Cannot move the camera: the machine is not homed.")
+                return
+            state["busy"] = True
+            view.info.setText("<html>camera to %s ...</html>" % what)
+
+            def work():
+                try:
+                    im, u = oppnp.run_machine_task(machine, lambda: feedercheck.photo_at(machine, ax, ay, state["z"]))
+
+                    def show():
+                        state.update({"size": (im.getWidth(), im.getHeight()), "upp": u, "at": (ax, ay), "click": None})
+                        view.set_image(im)
+                        view.info.setText(text())
+                    oppnp.on_ui(show)
+                    self.log("%s: hand offset photo at %s X %.3f Y %.3f" % (f.getName(), what, ax, ay))
+                except (Exception, JavaException) as e:
+                    oppnp.on_ui(lambda: view.info.setText("<html>camera not moved: %s</html>" % e))
+                finally:
+                    state["busy"] = False
+            oppnp.in_background(work)
+
+        def camera_here(w):
+            o = offset()
+            if o is None:
+                JOptionPane.showMessageDialog(w, "Click in the photo where the camera shall go (towards the pocket).")
+                return
+            px, py, _ = pick_now()
+            photo_to(w, px + o[0], py + o[1], "the clicked point")
+
+        def camera_slot(w):
+            s = feedercheck.slot_xy(f)
+            if s is None:
+                JOptionPane.showMessageDialog(w, "%s has no slot location." % f.getName())
+                return
+            photo_to(w, s[0], s[1], "the slot location")
+
         def apply_click(w):
-            if not state["click"]:
+            o = offset()
+            if o is None:
                 JOptionPane.showMessageDialog(w, "Click the centre of the pick pocket in the photo first.")
                 return
-            dx, dy = feedercheck.click_offset(state["click"][0], state["click"][1], size, upp)
-            if JOptionPane.showConfirmDialog(w, "Move the pick location of %s by %+.2f / %+.2f mm?" % (f.getName(), dx, dy),
+            dx, dy = o
+            d = (dx * dx + dy * dy) ** 0.5
+            warn = ("\n\nLarge move (%.1f mm): make sure the blue cross is on the pocket of THIS feeder, not of a "
+                    "neighbouring tape." % d) if d > 2.0 else ""
+            if JOptionPane.showConfirmDialog(w, "Move the pick location of %s by %+.2f / %+.2f mm?%s" % (f.getName(), dx, dy, warn),
                                              "Set offset by hand", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
                 return
             try:
-                before, after = feedercheck.apply_pocket_offset(f, dx, dy)
+                before, after = feedercheck.apply_pocket_offset(f, dx, dy, limit_mm=None)
                 x["status"] = "offset set by hand: pick %.3f/%.3f -> %.3f/%.3f (check again)" % (
                     before.getX(), before.getY(), after.getX(), after.getY())
                 res["pocket_dx"] = None
@@ -637,7 +716,12 @@ class PartCheck(object):
 
         fr, view = zoomview.image_window(
             "Set offset by hand: %s" % f.getName(), img, "", overlay, click,
-            [("Apply this offset", apply_click, "Move the pick location onto the point you clicked (max 2 mm).")],
+            [("Camera here (new photo)", camera_here, "Move the camera to the point you clicked and take a new photo "
+              "there (to find a pocket outside this photo)."),
+             ("Camera to slot location", camera_slot, "Move the camera to the feeder's slot location (its rough position "
+              "captured at set-up) and take a new photo."),
+             ("Apply this offset", apply_click, "Move the pick location onto the point you clicked (any distance, "
+              "after a confirmation).")],
             self.frame)
         view.info.setText(text())
 

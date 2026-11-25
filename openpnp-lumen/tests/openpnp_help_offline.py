@@ -337,6 +337,68 @@ d = (after.getX() - before.getX(), after.getY() - before.getY())
 check("part check: click in the photo + Apply moves the pick location by the clicked offset",
       abs(d[0] - 0.30) < 1e-6 and abs(d[1] - 0.50) < 1e-6 and row["status"].startswith("offset set by hand"), (d, row.get("status")))
 
+
+def _hand_window(click_px):
+    created[:] = []
+    i0 = pc.table.convertRowIndexToView(0)
+    pc.table.setRowSelectionInterval(i0, i0)
+    pc.hand_offset()
+    w = created[-1]
+    v = [c for c in uihelp._walk(w.content) if isinstance(c, zoomview.ImageView)][0]
+    if click_px:
+        v.on_click(*click_px)
+    return w, v
+
+
+def _press(w, label):
+    [c for c in uihelp._walk(w.content) if hasattr(c, "getText") and c.getText() == label][0].doClick()
+
+
+from javax.swing import SwingUtilities as _SU0
+from java.lang import Runnable as _R0
+class _Flush(_R0):
+    def run(self):
+        pass
+row["res"]["pick"] = [before.getX(), before.getY(), before.getZ(), 0.0]   # the check photo was taken at the old pick
+p1 = f0.getPickLocation()
+w, v = _hand_window((500 + 30, 300 - 50))                 # the SAME pocket again, on the same (old) photo
+_press(w, "Apply this offset")
+p2 = f0.getPickLocation()
+check("hand offset: the same click on the same photo after Apply does not move again (absolute, not +0.3/+0.5 twice)",
+      abs(p2.getX() - p1.getX()) < 1e-6 and abs(p2.getY() - p1.getY()) < 1e-6, (p2.getX() - p1.getX(), p2.getY() - p1.getY()))
+w, v = _hand_window((500 + 800, 300))                      # 8 mm right: was refused (max 2 mm)
+_press(w, "Apply this offset")
+p3 = f0.getPickLocation()
+check("hand offset: no 2 mm limit (8 mm applied after the confirmation)", abs(p3.getX() - (before.getX() + 8.0)) < 1e-6,
+      p3.getX() - before.getX())
+shots = []
+newshot = _BI(800, 400, _BI.TYPE_INT_RGB)
+g_p["feedercheck"].photo_at = lambda m, x, y, z: (shots.append((x, y, z)) or (newshot, (0.02, 0.02)))
+g_p["oppnp"].run_machine_task = lambda m, fn: fn()
+g_p["oppnp"].confirm_ready = lambda *a: True
+g_p["oppnp"].in_background = lambda fn: fn()
+_homed = machine.isHomed()
+machine.setHomed(True)
+w, v = _hand_window((500 - 200, 300 + 100))                # 2 mm left, 1 mm down of the photo centre (old pick)
+_press(w, "Camera here (new photo)")
+_SU0.invokeAndWait(_Flush())
+check("hand offset: Camera here takes the new photo at the clicked point (absolute)",
+      len(shots) == 1 and abs(shots[0][0] - (before.getX() - 2.0)) < 1e-6 and abs(shots[0][1] - (before.getY() - 1.0)) < 1e-6
+      and v.image is newshot, shots)
+v.on_click(400 + 25, 200)                                 # 0.5 mm right of the NEW photo centre (upp 0.02)
+_press(w, "Apply this offset")
+p4 = f0.getPickLocation()
+check("hand offset: a click in the new photo sets the pick location there",
+      abs(p4.getX() - (before.getX() - 1.5)) < 1e-6 and abs(p4.getY() - (before.getY() - 1.0)) < 1e-6,
+      (p4.getX() - before.getX(), p4.getY() - before.getY()))
+w, v = _hand_window(None)
+_press(w, "Camera to slot location")
+_SU0.invokeAndWait(_Flush())
+sx = g_p["feedercheck"].slot_xy(f0)
+check("hand offset: Camera to slot location photographs the feeder's slot location",
+      sx is not None and len(shots) == 2 and abs(shots[1][0] - sx[0]) < 1e-6 and abs(shots[1][1] - sx[1]) < 1e-6, (sx, shots))
+machine.setHomed(_homed)
+
 # Feeder Assistant: Look at this feeder (camera) - synthetic camera picture
 g_a, fa = OBJS["Feeder_Assistant.py"]
 fa.ptable.setRowSelectionInterval(0, 0)
