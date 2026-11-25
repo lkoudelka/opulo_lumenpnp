@@ -353,7 +353,7 @@ class MachineCal(object):
             btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
-        def work():
+        def steps():
             try:
                 for k in keys:
                     if self.stop_flag:
@@ -383,6 +383,13 @@ class MachineCal(object):
                     oppnp.run_machine_task(machine, lambda: machine.getDefaultHead().moveToSafeZ())
                 except (Exception, JavaException):
                     pass
+
+        def work():
+            try:
+                oppnp.at_speed(machine, oppnp.CAL_SPEED, steps, log=self.say)     # 50 %, previous speed restored
+            except (Exception, JavaException) as e:
+                self.say("FAILED: %s" % e)
+            finally:
                 self.busy = False
 
                 def ui():

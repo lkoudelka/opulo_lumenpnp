@@ -537,6 +537,8 @@ The Opulo guide swaps to N08 first; tick <i>swap</i> for that, otherwise no tip 
 the right side shows what to do with pictures. <b>Never home while the calibration target lies on the visual
 home</b>; the tool checks it with the camera before every homing. The backup is in
 ~/.openpnp2/lumen/calibration/. At the end the machine is ready for File &gt; New Job / Import Board.</p>
+<p>The run goes at <b>50 % machine speed</b> (slower if OpenPnP's speed is set lower); the previous speed is put back
+when the run ends or stops.</p>
 """ + MOVES % "homing; camera to the fiducials; nozzles <b>down slowly onto the fiducials</b> (contact probe); N1 over the "
               "bottom camera; tip change position; <b>pick and place of the calibration target</b>; backlash test moves.",
     "tips": {

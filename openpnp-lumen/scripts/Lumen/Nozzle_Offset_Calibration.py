@@ -35,7 +35,6 @@ from javax.swing import (BorderFactory, JButton, JCheckBox, JFrame, JLabel, JOpt
                          JTextArea, JTextField, WindowConstants)
 
 DEFAULT_PARK = (240.624, 189.420)
-CAL_SPEED = 0.5             # OpenPnP machine speed during the calibration (restored afterwards)
 
 
 class NozzleCal(object):
@@ -65,7 +64,7 @@ class NozzleCal(object):
         self.text.setEditable(False)
         self.text.setText("The target is carried from its park spot to the visual home, OpenPnP calibrates the ticked\n"
                           "nozzles, then the target goes back. Do not home the machine while the target is on the visual home.\n"
-                          "The machine speed is set to %d %% for the calibration and restored afterwards.\n" % int(CAL_SPEED * 100))
+                          "The machine speed is set to %d %% for the calibration and restored afterwards.\n" % int(oppnp.CAL_SPEED * 100))
         root.add(JScrollPane(self.text), BorderLayout.CENTER)
         b = JPanel(FlowLayout(FlowLayout.RIGHT))
         self.run_btn = JButton("Run calibration", actionPerformed=lambda e: self.run())
@@ -103,8 +102,8 @@ class NozzleCal(object):
         def work():
             try:
                 carrier = machine.getDefaultHead().getNozzles()[0]
-                self.result = oppnp.run_machine_task(machine, lambda: nozzlecal.at_speed(
-                    machine, CAL_SPEED, lambda: nozzlecal.calibrate_openpnp(machine, nozzles, park, carrier, log=self.say),
+                self.result = oppnp.run_machine_task(machine, lambda: oppnp.at_speed(
+                    machine, oppnp.CAL_SPEED, lambda: nozzlecal.calibrate_openpnp(machine, nozzles, park, carrier, log=self.say),
                     log=self.say))
                 for k, (o, n) in sorted(self.result["offsets"].items()):
                     self.say("RESULT %s: head offsets %s -> %s" % (k, o, n))
