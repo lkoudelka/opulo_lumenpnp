@@ -110,6 +110,7 @@ class DotSquare(JPanel):
         self.addMouseListener(_Click(self))
         # wheel zoom in AND out (to the whole camera frame) / drag / right click fit, like the camera view
         self.zp = lumen.zoomview.ZoomPan(self, min_scale=0.1, anchor=lambda: self.geometry()[:2])
+        self.shrunk = lumen.zoomview.Shrunk()                # sharp when the photo is drawn smaller than 1:1
 
     def geometry(self):
         w, h = self.getWidth(), self.getHeight()
@@ -157,7 +158,7 @@ class DotSquare(JPanel):
             k = s / float(self.photo_px)
             g.translate(cx - self.photo.getWidth() * k / 2.0, cy - self.photo.getHeight() * k / 2.0)
             g.scale(k, k)
-            g.drawImage(self.photo, 0, 0, None)
+            lumen.zoomview.draw_picture(graphics, self.photo, self.shrunk, k * self.zp.scale())
             g.setTransform(old_t)
             self.zp.apply(graphics)
         elif self.image is not None:
@@ -393,7 +394,7 @@ class TestDialog(object):
         centre = JPanel(BorderLayout(8, 0))
         self.square = DotSquare("Placed part, top camera (X right / Y up)",
                                 "red dot = pin 1 of the PART, green ring = pin 1 of the BOARD", self.update)
-        self.square.setPreferredSize(Dimension(420, 480))
+        self.square.setPreferredSize(Dimension(520, 580))
         self.square.hint = "Start the test placement; the photo of the placed part appears here."
         centre.add(self.square, BorderLayout.CENTER)
         side = self.side = JPanel()
