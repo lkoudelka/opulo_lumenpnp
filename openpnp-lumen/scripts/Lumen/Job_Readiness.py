@@ -3,6 +3,8 @@
 # Only the parts and feeders the open job uses: quantity, remaining, feeder(s), part
 # height, blocking issues.  Optional: show the job's Photon feeders on their LEDs
 # (green = needed and ready, red = needed but has an issue, off = not used by the job).
+# Camera to the selected line: the top camera goes over the part's feeder or its next placement on
+# the board (repeated presses step through them).  Camera moves only (safe Z).
 # Read-only towards the job and the machine configuration.
 from __future__ import absolute_import, division, print_function
 
@@ -17,15 +19,18 @@ import lumen.oppnp
 import lumen.helptext
 import lumen.uihelp
 import lumen.jobinfo
+import lumen.feedercheck
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
-from lumen import jobinfo, oppnp, photon
+reload(lumen.feedercheck)
+from lumen import feedercheck, jobinfo, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
+from java.awt.event import MouseAdapter
 from java.lang import String
 from javax.swing import (BorderFactory, JButton, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
                          JTable, WindowConstants)
@@ -81,7 +86,15 @@ class Readiness(object):
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
         self.summary = JLabel(" ")
         root.add(self.summary, BorderLayout.NORTH)
-        table = JTable(self.model)
+        table = self.table = JTable(self.model)
+        rd = self
+
+        class _Dbl(MouseAdapter):
+            def mouseClicked(self, e):
+                if e.getClickCount() == 2:
+                    rd.camera_feeder()
+        table.addMouseListener(_Dbl())
+        self.step = {}                               # (part_id, "feeder"|"placement") -> next index
         r = IssueRenderer(self.model)
         for i in range(len(COLS)):
             table.getColumnModel().getColumn(i).setCellRenderer(r)
@@ -91,11 +104,17 @@ class Readiness(object):
         sp.setPreferredSize(Dimension(1080, 380))
         root.add(sp, BorderLayout.CENTER)
         b = JPanel(FlowLayout(FlowLayout.RIGHT))
+        b.add(JButton("Camera to feeder", actionPerformed=lambda e: self.camera_feeder()))
+        b.add(JButton("Camera to next placement", actionPerformed=lambda e: self.camera_placement()))
         b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh()))
         b.add(JButton("Show on feeder LEDs", actionPerformed=lambda e: self.leds(True)))
         b.add(JButton("Feeder LEDs off", actionPerformed=lambda e: self.leds(False)))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
-        root.add(b, BorderLayout.SOUTH)
+        self.info = JLabel(" ")
+        south = JPanel(BorderLayout())
+        south.add(self.info, BorderLayout.CENTER)
+        south.add(b, BorderLayout.EAST)
+        root.add(south, BorderLayout.SOUTH)
         f.setContentPane(lumen.uihelp.wrap(root, "job_readiness"))
         f.pack()
         f.setLocationRelativeTo(gui)
@@ -113,6 +132,85 @@ class Readiness(object):
             name, len(rows), sum(x["total"] for x in rows), sum(x["remaining"] for x in rows),
             "<font color='red'>%d part(s) with issues</font>" % blocking if blocking else
             "<font color='green'>no blocking issue found</font>"))
+
+    # -- camera to the selected line -------------------------------------------------------------
+    def selected(self):
+        i = self.table.getSelectedRow()
+        if i < 0:
+            JOptionPane.showMessageDialog(self.frame, "Select a line (part) first.")
+            return None
+        return self.model.rows[self.table.convertRowIndexToModel(i)]
+
+    def next_of(self, x, kind, n):
+        k = (x["part_id"], kind)
+        i = self.step.get(k, 0) % n
+        self.step[k] = i + 1
+        return i
+
+    def can_move(self):
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return False
+        if not machine.isHomed():
+            JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.\n"
+                                          "Home it first (nozzles up, visual home free of the disc).")
+            return False
+        return True
+
+    def move_camera(self, what, target):
+        """target() runs in a machine task, moves the top camera and returns the text for the status line."""
+        self.info.setText("moving the camera to %s ..." % what)
+
+        def work():
+            try:
+                text = oppnp.run_machine_task(machine, target)
+            except (Exception, JavaException) as e:
+                text = "camera not moved (%s): %s" % (what, e)
+            self.log(text)
+            oppnp.on_ui(lambda: self.info.setText(text))
+        oppnp.in_background(work)
+
+    def camera_feeder(self):
+        x = self.selected()
+        if x is None:
+            return
+        fs = jobinfo.feeders_to_look_at(x)
+        if not fs:
+            JOptionPane.showMessageDialog(self.frame, "%s: no feeder has this part." % x["part_id"])
+            return
+        if not self.can_move():
+            return
+        i = self.next_of(x, "feeder", len(fs))
+        f = fs[i]
+
+        def target():
+            p = feedercheck.go_to(machine, f)
+            return "camera at the pick location of %s (%s, feeder %d/%d) X %.3f Y %.3f" % (
+                f.getName(), x["part_id"], i + 1, len(fs), p.getX(), p.getY())
+        self.move_camera("feeder %s" % f.getName(), target)
+
+    def camera_placement(self):
+        from org.openpnp.model import LengthUnit
+        from org.openpnp.util import MovableUtils, Utils2D
+        x = self.selected()
+        if x is None:
+            return
+        job = gui.getJobTab().getJob()
+        pls = jobinfo.part_placements(job, x["part_id"]) if job else []
+        if not pls:
+            JOptionPane.showMessageDialog(self.frame, "%s: no placement in the open job." % x["part_id"])
+            return
+        if not self.can_move():
+            return
+        i = self.next_of(x, "placement", len(pls))
+        bl, pl, placed = pls[i]
+
+        def target():
+            loc = Utils2D.calculateBoardPlacementLocation(bl, pl).convertToUnits(LengthUnit.Millimeters)
+            MovableUtils.moveToLocationAtSafeZ(machine.getDefaultHead().getDefaultCamera(), loc)
+            return "camera at %s %s (%s, placement %d/%d%s) X %.3f Y %.3f" % (
+                bl.getBoard().getName() if bl.getBoard() is not None else "board", pl.getId(), x["part_id"],
+                i + 1, len(pls), ", placed" if placed else "", loc.getX(), loc.getY())
+        self.move_camera("placement %s" % pl.getId(), target)
 
     def leds(self, show):
         if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot talk to the feeders"):

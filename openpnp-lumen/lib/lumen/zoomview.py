@@ -2,7 +2,8 @@
 """Zoom and pan for the Lumen windows' pictures (Jython, Swing), like OpenPnP's camera view.
 
 Mouse wheel = zoom in / out at the mouse pointer, left drag = move the zoomed picture, right click = fit
-again.  ZoomPan adds this to any JPanel that paints itself (the panel applies zp.apply(g) and maps clicks
+again.  With min_scale < 1 the view also zooms OUT (below the fit) around anchor(), e.g. from a crop to the
+whole camera frame drawn around it.  ZoomPan adds this to any JPanel that paints itself (the panel applies zp.apply(g) and maps clicks
 with zp.to_view); ImageView is a ready panel for one image with an overlay painted in image pixels and
 clicks reported in image pixels; image_window() opens it in a window with a text and buttons.
 """
@@ -14,7 +15,7 @@ from java.awt.geom import AffineTransform, Point2D
 from java.awt.image import BufferedImage
 from javax.swing import JButton, JEditorPane, JFrame, JPanel, JScrollPane, SwingUtilities, WindowConstants
 
-HINT = u"wheel: zoom · drag: move · right click: fit"
+HINT = u"wheel: zoom in / out \u00b7 drag: move \u00b7 right click: fit"
 
 
 class _G(object):
@@ -53,10 +54,12 @@ class _Mouse(MouseAdapter):
 
 
 class ZoomPan(object):
-    """View transform of a panel: zoom 1x (fit) ... max_scale, kept inside the panel."""
+    """View transform of a panel: zoom min_scale ... 1x (fit) ... max_scale.  Zoomed in it is kept inside the
+    panel; zoomed out (below 1x) it shrinks around anchor() (panel point, default the panel centre)."""
 
-    def __init__(self, panel, max_scale=40.0, step=1.25):
+    def __init__(self, panel, max_scale=40.0, step=1.25, min_scale=1.0, anchor=None):
         self.panel, self.max_scale, self.step = panel, max_scale, step
+        self.min_scale, self.anchor = min_scale, anchor
         self.at = AffineTransform()
         m = _Mouse(self)
         panel.addMouseListener(m)
@@ -68,8 +71,8 @@ class ZoomPan(object):
 
     def wheel(self, x, y, rotation):
         s = self.scale()
-        new = min(self.max_scale, max(1.0, s * self.step ** (-rotation)))
-        if new <= 1.0001:
+        new = min(self.max_scale, max(self.min_scale, s * self.step ** (-rotation)))
+        if abs(new - 1.0) < 0.0001 or (self.min_scale >= 1.0 and new <= 1.0001):
             self.reset()
             return
         f = new / s
@@ -82,7 +85,7 @@ class ZoomPan(object):
         self.panel.repaint()
 
     def drag(self, dx, dy):
-        if self.scale() <= 1.0001:
+        if self.scale() <= 1.0001:                  # fit or zoomed out: the whole picture is visible
             return
         self.at.preConcatenate(AffineTransform.getTranslateInstance(dx, dy))
         self._clamp()
@@ -92,6 +95,10 @@ class ZoomPan(object):
         """Keep the zoomed panel area covering the panel (no empty border when dragging)."""
         s = self.scale()
         w, h = self.panel.getWidth(), self.panel.getHeight()
+        if s < 1.0:
+            ax, ay = self.anchor() if self.anchor is not None else (w / 2.0, h / 2.0)
+            self.at.setTransform(s, 0, 0, s, ax * (1 - s), ay * (1 - s))
+            return
         tx = min(0.0, max(w - w * s, self.at.getTranslateX()))
         ty = min(0.0, max(h - h * s, self.at.getTranslateY()))
         self.at.setTransform(s, 0, 0, s, tx, ty)
@@ -155,8 +162,7 @@ class ImageView(JPanel):
     def paintComponent(self, graphics):
         self.super__paintComponent(graphics)
         g = _G(graphics)
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        quality(graphics)
         old = g.getTransform()
         if self.image is not None:
             s, ox, oy = self.fit()
@@ -172,6 +178,15 @@ class ImageView(JPanel):
         g.setColor(Color(220, 220, 220))
         g.setFont(Font(Font.SANS_SERIF, Font.PLAIN, 12))
         g.drawString(self.zp.text(), 6, self.getHeight() - 5)
+
+
+def quality(graphics):
+    """Smooth image scaling (bicubic) and antialiased marks: a camera picture drawn larger or smaller than
+    its pixels stays as sharp as it can (the default, nearest neighbour, makes it blocky and jagged)."""
+    g = _G(graphics)
+    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+    g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
 
 def cross(graphics, x, y, r, colour, k, width=2.0):

@@ -223,6 +223,39 @@ time.sleep(3)
 llog = open(r.log.path).read()
 check("LEDs set on job feeders", "(2, 'set')" in llog and "(3, 'set')" in llog, llog.strip()[-160:])
 
+
+def cam_at(x, y, what, t=30):
+    cam = machine.getDefaultHead().getDefaultCamera()
+    end = time.time() + t
+    while time.time() < end:
+        l = cam.getLocation().convertToUnits(mm)
+        if abs(l.getX() - x) < 0.01 and abs(l.getY() - y) < 0.01 and not str(r.info.getText()).startswith("moving"):
+            while machine.isBusy() and time.time() < end:
+                time.sleep(0.1)
+            return check(what, True)
+        time.sleep(0.2)
+    check(what, False, "camera at %s, info %s, msgs %s" % (cam.getLocation(), r.info.getText(), FakeOptionPane.messages[-2:]))
+
+
+ri = [x["part_id"] for x in r.model.rows].index("R0402")
+r.table.setRowSelectionInterval(ri, ri)
+FakeOptionPane.messages = []
+r.camera_feeder()
+check("camera refused while not homed", any("not homed" in m for m in FakeOptionPane.messages), FakeOptionPane.messages)
+oppnp.run_machine_task(machine, lambda: machine.home())
+r.step = {}
+pick2 = [f for f in machine.getFeeders() if getattr(f, "getSlotAddress", lambda: None)() == 2][0].getPickLocation().convertToUnits(mm)
+r.camera_feeder()
+cam_at(pick2.getX(), pick2.getY(), "camera to feeder: R0402's feeder (slot 2) pick location")
+r.camera_placement()
+cam_at(105, 105, "camera to next placement: P1 (board 100/100 + 5/5)")
+r.camera_placement()
+cam_at(106, 105, "camera to next placement again: P2")
+r.camera_placement()
+cam_at(105, 105, "placements wrap around to P1")
+check("status line names the placement", "P1" in str(r.info.getText()) and "1/2" in str(r.info.getText()),
+      r.info.getText())
+
 print("Last Placements dialog")
 from lumen import journal
 journal.record(FakeScripting(), str(job.getFile().getAbsolutePath()), parts["R0402"], None,

@@ -243,6 +243,49 @@ sq.click(*sq.zp.to_view(sx, sy))
 check("test placement photo: zoomed in, a click on a corner sets that corner", sq.dot == corner, (sq.dot, corner))
 render(sq, "zoom-dotsquare.png")
 
+# test placement photo: whole camera frame behind the square; zoom OUT shows the rest of the frame
+from java.awt import Graphics2D as _G2
+fr = _BI(1280, 720, _BI.TYPE_INT_RGB)
+gg = fr.createGraphics()
+_G2.setColor(gg, _C(0, 0, 255)); _G2.fillRect(gg, 0, 0, 1280, 720)             # blue: outside the crop
+_G2.setColor(gg, _C(0, 200, 0)); _G2.fillRect(gg, 640 - 150, 360 - 150, 300, 300)  # green: the 300 px crop
+_G2.setColor(gg, _C(255, 0, 0)); _G2.fillRect(gg, 630, 350, 20, 20)              # red: the centre
+_G2.dispose(gg)
+sq2 = g_o["DotSquare"]("t", "s", None)
+sq2.setSize(320, 380)
+sq2.photo, sq2.photo_px = fr, 300
+
+
+def _px(panel, x, y):
+    im = _BI(320, 380, _BI.TYPE_INT_RGB)
+    g2 = im.createGraphics()
+    panel.paint(g2)
+    _G2.dispose(g2)
+    c = _C(im.getRGB(int(x), int(y)))
+    return (c.getRed() > 150, c.getGreen() > 150, c.getBlue() > 150)
+
+
+cx, cy, s = sq2.geometry()
+check("photo: the crop fills the square (centre red, inside green)",
+      _px(sq2, cx, cy) == (True, False, False) and _px(sq2, cx + s * 0.45, cy) == (False, True, False),
+      (_px(sq2, cx, cy), _px(sq2, cx + s * 0.45, cy)))
+for _ in range(20):
+    sq2.zp.wheel(10, 10, 1)                                   # zoom out (pointer anywhere)
+check("photo: zoom out goes below the fit, down to 0.1x", abs(sq2.zp.scale() - 0.1) < 1e-6, sq2.zp.scale())
+check("photo: zoomed out around the square centre", max(abs(a - b) for a, b in zip(sq2.zp.to_view(cx, cy), (cx, cy))) < 1e-6)
+# at 0.1x: crop half = 150 * s/300 * 0.1 (~12 px), frame half = 640 * s/300 * 0.1 (~53 px)
+check("photo: zoomed out, the frame outside the crop is visible", _px(sq2, cx + s * 0.12, cy) == (False, False, True),
+      _px(sq2, cx + s * 0.12, cy))
+corner2 = list(g_o["POS"])[0]
+m2x, m2y = sq2.mark_xy(corner2)
+sx2, sy2 = cx + (m2x - cx) * 0.1, cy + (m2y - cy) * 0.1      # where that corner is drawn at 0.1x
+sq2.click(*sq2.zp.to_view(sx2, sy2))
+check("photo: zoomed out, a click on a corner still sets that corner", sq2.dot == corner2, (sq2.dot, corner2))
+sq2.zp.wheel(cx, cy, -1)
+check("photo: wheel zooms back in from below the fit", abs(sq2.zp.scale() - 0.125) < 1e-6, sq2.zp.scale())
+render(sq2, "zoom-out-dotsquare.png")
+sq2.zp.reset()
+
 # Feeder Part Check: only the open job's feeders, offset set by hand in the photo
 g_p, pc = OBJS["Feeder_Part_Check.py"]
 jp = g_p["job_part_ids"](G())

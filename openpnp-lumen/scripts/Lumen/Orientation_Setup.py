@@ -99,6 +99,8 @@ class DotSquare(JPanel):
         self.pads = []          # [(number, x, y)] mm, drawn on the body (CAD: footprint; feeder: predicted)
         self.pads_dim = False   # predicted pads (feeder square) are drawn lighter
         self.image = None       # optional camera image (feeder square)
+        self.photo = None       # or: the whole camera frame, centred, so that photo_px frame pixels fill the square
+        self.photo_px = None    # (zoom out shows the rest of the frame)
         self.ring = None        # second mark (test placement: pin 1 of the BOARD), drawn as a green ring
         self.pad_mm = None      # pads at true scale: the square shows pad_mm x pad_mm (photo of a placed part)
         self.click_sets = "dot"  # "ring": a click moves the green ring instead of the red dot
@@ -106,7 +108,8 @@ class DotSquare(JPanel):
         self.setPreferredSize(Dimension(320, 380))
         self.setBackground(Color.WHITE)
         self.addMouseListener(_Click(self))
-        self.zp = lumen.zoomview.ZoomPan(self)           # wheel zoom / drag / right click fit, like the camera view
+        # wheel zoom in AND out (to the whole camera frame) / drag / right click fit, like the camera view
+        self.zp = lumen.zoomview.ZoomPan(self, min_scale=0.1, anchor=lambda: self.geometry()[:2])
 
     def geometry(self):
         w, h = self.getWidth(), self.getHeight()
@@ -139,7 +142,7 @@ class DotSquare(JPanel):
     def paintComponent(self, graphics):
         self.super__paintComponent(graphics)
         g = _G(graphics)
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        lumen.zoomview.quality(graphics)
         cx, cy, s = self.geometry()
         g.setColor(Color.BLACK)
         g.setFont(Font(Font.SANS_SERIF, Font.BOLD, 14))
@@ -150,7 +153,14 @@ class DotSquare(JPanel):
         old_t = g.getTransform()
         g.setClip(x0 - int(s * 0.12), y0 - int(s * 0.12), int(s * 1.24), int(s * 1.24))
         self.zp.apply(graphics)
-        if self.image is not None:
+        if self.photo is not None and self.photo_px:
+            k = s / float(self.photo_px)
+            g.translate(cx - self.photo.getWidth() * k / 2.0, cy - self.photo.getHeight() * k / 2.0)
+            g.scale(k, k)
+            g.drawImage(self.photo, 0, 0, None)
+            g.setTransform(old_t)
+            self.zp.apply(graphics)
+        elif self.image is not None:
             g.drawImage(self.image, x0, y0, int(s), int(s), None)
         else:
             g.setColor(Color(225, 225, 225))
@@ -283,8 +293,8 @@ class CheckDialog(object):
             MovableUtils.moveToLocationAtSafeZ(cam, feeder.getPickLocation())
             img = cam.settleAndCapture()
             w, h = img.getWidth(), img.getHeight()
-            s = min(w, h) // 3                       # centre crop around the pick location
-            self.left.image = img.getSubimage(w // 2 - s // 2, h // 2 - s // 2, s, s)
+            s = min(w, h) // 3                       # the square shows the centre (pick location); zoom out: all
+            self.left.photo, self.left.photo_px = lumen.zoomview.copy_image(img), s
             oppnp.on_ui(self.left.repaint)
         submitUiMachineTask(task)
 
@@ -517,6 +527,7 @@ class TestDialog(object):
     def show_photo(self):
         r, st, sq = self.res, self.state, self.square
         sq.image, sq.pad_mm = r["crop"], r["crop_mm"]
+        sq.photo, sq.photo_px = r.get("frame"), r.get("crop_px")
         sq.pads = ori.rotate_points(self.row.get("pads") or [], st["placement_rot"])
         sq.pads_dim = True
         if sq.ring is None:

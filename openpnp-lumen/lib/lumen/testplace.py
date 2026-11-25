@@ -164,6 +164,9 @@ def split_rows(rows):
     return keep, [r for r in rows if r.get("matters") is False]
 
 
+CROP_MIN_PX = 300
+
+
 def view_check(length, width, upp, w_px, h_px):
     """None when the body fits the square photo crop (short side of the camera image), else a warning."""
     if not length or not upp:
@@ -375,11 +378,19 @@ def photo(machine, bl, pl, st, golden_root=None, save_dir=None):
     res["proposal"], res["proposal_why"] = propose_turn(res.get("golden_turns"))
     res["axis_rot"], res["length"], res["width"] = axis, length, width
     res["view_warning"] = view_check(length, width, upp, img.getWidth(), img.getHeight())
+    # the square shows at least 3x the body and at least CROP_MIN_PX camera pixels (about 1 screen pixel per
+    # camera pixel: as sharp as the camera view); zooming out shows the whole frame (res["frame"])
     crop_mm = max(2.0, 3.0 * (length or 1.0))
-    s = int(min(crop_mm / upp, img.getWidth(), img.getHeight()))
+    s = int(min(max(crop_mm / upp, CROP_MIN_PX), img.getWidth(), img.getHeight()))
+    res["crop_px"] = s
     res["crop_mm"] = s * upp
     res["crop"] = img.getSubimage(img.getWidth() // 2 - s // 2, img.getHeight() // 2 - s // 2, s, s)
     res["_image"] = img
+    try:
+        from lumen.zoomview import copy_image
+        res["frame"] = copy_image(img)
+    except _errors():
+        res["frame"] = None
     if save_dir:
         from java.io import File
         from javax.imageio import ImageIO
