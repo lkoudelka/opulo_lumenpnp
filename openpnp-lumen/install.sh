@@ -1,8 +1,9 @@
 #!/bin/sh
 # Install the Lumen scripts into OpenPnP (links into this checkout; nothing is copied).
 #   ./install.sh             menu scripts: Scripts > Lumen > ... and the inert feed hook
-#                            Events/Feeder.BeforeFeed.py (acts only for feeders ticked "While feeding") and
-#                            Events/Nozzle.AfterPick.py (acts only with "Pick vacuum check" enabled)
+#                            Events/Feeder.BeforeFeed.py (acts only for feeders ticked "While feeding"),
+#                            Events/Nozzle.AfterPick.py (acts only with "Pick vacuum check" enabled) and
+#                            Events/Startup.py (safe homing: nozzles to safe Z / confirmation before OpenPnP's Home)
 #   ./install.sh --journal   additionally the placement journal hook (Events/Job.Placement.Complete.py)
 #   ./uninstall.sh           removes exactly what this installed
 # OpenPnP: Scripts > Refresh Scripts (or restart) afterwards.  machine.xml is not touched.
@@ -22,6 +23,7 @@ link "$HERE/scripts/Lumen" "$CFG/scripts/Lumen"
 link "$HERE/lib" "$CFG/lumen/lib"
 link "$HERE/events/Feeder.BeforeFeed.py" "$CFG/scripts/Events/Feeder.BeforeFeed.py"
 link "$HERE/events/Nozzle.AfterPick.py" "$CFG/scripts/Events/Nozzle.AfterPick.py"
+link "$HERE/events/Startup.py" "$CFG/scripts/Events/Startup.py"
 if [ "$1" = "--journal" ]; then
     link "$HERE/events/Job.Placement.Complete.py" "$CFG/scripts/Events/Job.Placement.Complete.py"
 fi

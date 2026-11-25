@@ -22,6 +22,7 @@ import lumen.tapevision
 import lumen.zprobe
 import lumen.nozzlecal
 import lumen.machinecal
+import lumen.homeguard
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
@@ -31,7 +32,8 @@ reload(lumen.tapevision)
 reload(lumen.zprobe)
 reload(lumen.nozzlecal)
 reload(lumen.machinecal)
-from lumen import jobinfo, machinecal, oppnp, photon
+reload(lumen.homeguard)
+from lumen import homeguard, jobinfo, machinecal, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
@@ -237,21 +239,7 @@ STEPS = {"machine_enabled": st_machine_enabled, "job_open": st_job_open, "home":
 
 def confirm_home(parent):
     """Not homed: the person confirms nozzles up and level and the calibration target parked (pictures)."""
-    from java.awt import GridLayout
-    from javax.swing import ImageIcon
-    from javax.imageio import ImageIO
-    pics = JPanel(GridLayout(1, 0, 6, 0))
-    for name in ("cal-nozzles-level.png", "cal-home-free.png"):
-        p = os.path.join(_LIB, "lumen", "pictures", name)
-        if os.path.isfile(p):
-            pics.add(JLabel(ImageIcon(ImageIO.read(File(p)))))
-    box = JPanel(BorderLayout(0, 6))
-    box.add(JLabel("<html>The machine is not homed. Before Preflight homes it, check by eye:<br>"
-                   "1. both nozzles are <b>up and level</b>; 2. the <b>calibration target is on its park spot</b>, "
-                   "not on the visual home.<br>Home now?</html>"), BorderLayout.NORTH)
-    box.add(pics, BorderLayout.CENTER)
-    return JOptionPane.showConfirmDialog(parent, box, "Preflight: home the machine?",
-                                         JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION
+    return homeguard.confirm_unhomed(parent, "Preflight: home the machine?", "Preflight")
 
 
 class Model(AbstractTableModel):
