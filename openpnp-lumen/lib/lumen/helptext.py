@@ -177,6 +177,8 @@ HELP["nozzle_cal"] = {
 </ol>
 <p><b>Never home the machine while the target lies on the visual home</b> - visual homing would use it (coordinates
 ~2 mm off). Save the configuration afterwards to keep the new offsets.</p>
+<p>The calibration runs at <b>50 % machine speed</b> (slower if OpenPnP's speed is set lower); the previous speed is
+put back afterwards, also when the calibration stops.</p>
 """ + MOVES % "the nozzles <b>pick and place the target</b>; OpenPnP's routine picks / places it several times.",
     "tips": {
         "Target park spot X/Y:": "Where the target disc normally lies (camera position of its centre, mm). It is always returned here.",

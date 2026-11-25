@@ -384,6 +384,28 @@ check("no swap (default): bottom camera with the tip on N1, no tip change asked"
       and not any(q[0].startswith("Change the nozzle tip") for q in ui7.asked), (r, acc7, ui7.asked))
 check("no swap: 'tips back' has nothing to do", cal7.run("tips_back") == "tips already as before")
 
+# Nozzle Offset Calibration runs at 50 % machine speed and puts the previous speed back (nozzlecal.at_speed)
+seen = []
+machine.setSpeed(0.98)
+oppnp.run_machine_task(machine, lambda: nozzlecal.at_speed(machine, 0.5, lambda: seen.append(machine.getSpeed()), log=lambda t: None))
+check("nozzle cal: runs at 50 % speed, 98 % restored afterwards", seen == [0.5] and abs(machine.getSpeed() - 0.98) < 1e-9,
+      (seen, machine.getSpeed()))
+
+
+def _fail():
+    seen.append(machine.getSpeed())
+    raise RuntimeError("calibration stopped")
+try:
+    oppnp.run_machine_task(machine, lambda: nozzlecal.at_speed(machine, 0.5, _fail, log=lambda t: None))
+except RuntimeError:
+    pass
+check("nozzle cal: speed restored also when the calibration stops", seen[-1] == 0.5 and abs(machine.getSpeed() - 0.98) < 1e-9,
+      machine.getSpeed())
+machine.setSpeed(0.3)
+oppnp.run_machine_task(machine, lambda: nozzlecal.at_speed(machine, 0.5, lambda: seen.append(machine.getSpeed()), log=lambda t: None))
+check("nozzle cal: a slower speed set by the person is kept (never faster)", seen[-1] == 0.3 and machine.getSpeed() == 0.3)
+machine.setSpeed(1.0)
+
 _Sys.out.println("%d/%d passed" % (sum(results), len(results)))
 machine.setEnabled(False)
 _Sys.exit(0 if all(results) else 1)

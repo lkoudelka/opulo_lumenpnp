@@ -60,6 +60,22 @@ def find_disc(image, upp, cam_xy, diameter_mm, tol=0.2):
     return best[1] if best else None
 
 
+def at_speed(machine, speed, fn, log=print):
+    """Run fn() with OpenPnP's machine speed at most `speed` (0..1), then put the previous speed back (also when
+    fn fails).  Never faster than the person had set.  Call inside a machine task."""
+    old = machine.getSpeed()
+    new = min(old, speed)
+    if new != old:
+        machine.setSpeed(new)
+        log("machine speed %d %% -> %d %% for the calibration" % (round(old * 100), round(new * 100)))
+    try:
+        return fn()
+    finally:
+        if machine.getSpeed() != old:
+            machine.setSpeed(old)
+            log("machine speed back to %d %%" % round(old * 100))
+
+
 def look_disc(machine, x, y, z, diameter_mm):
     from org.openpnp.model import Length, Location
     from org.openpnp.util import MovableUtils
