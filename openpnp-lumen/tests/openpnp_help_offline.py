@@ -110,7 +110,7 @@ TOOLS = [("Feeder_Part_Check.py", "part_check"), ("Board_Z_Probe.py", "board_z")
          ("Placement_Inspection.py", "inspection"), ("Feeder_Firmware_Update.py", "firmware_update"),
          ("Job_Readiness.py", "job_readiness"), ("Last_Placements.py", "last_placements"), ("Orientation_Setup.py", "orientation"),
          ("Pick_Offset_Learning.py", "pick_learning"), ("Preflight.py", "preflight"),
-         ("Feeder_Assistant.py", "feeder_assist")]
+         ("Feeder_Assistant.py", "feeder_assist"), ("Machine_Calibration.py", "machine_cal")]
 for script, key in TOOLS:
     src = open(os.path.join(ROOT, "scripts", "Lumen", script)).read().rstrip().split("\n")
     g = {"__name__": "__main__", "scripting": Scr(), "machine": machine, "gui": G()}
@@ -140,6 +140,18 @@ for script, key in TOOLS:
         btn.doClick()
         ok = ok and not sp.isVisible()
     check("%-30s help panel opens and closes" % script, ok)
+    if script == "Machine_Calibration.py":
+        render(content, "machine_cal-steps.png")
+        obj.show_question("Change the nozzle tip by hand",
+                          "<p>OpenPnP moved N1 to the tip change position.</p><p><b>Please perform a manual nozzle tip N045 "
+                          "unload from nozzle N1 and a manual nozzle tip N08 load on nozzle N1 now.</b></p><p>Pull the old "
+                          "tip straight down, put it into its holder slot, push the new tip on until it sits straight. "
+                          "Then press <i>Done</i>.</p>", ["cal-tip-swap.png"], ["Done", "Cancel"])
+        btns = [c.getText() for c in uihelp._walk(obj.right) if c.getClass().getSimpleName() == "JButton"]
+        pics = [c for c in uihelp._walk(obj.right) if c.getClass().getSimpleName() == "JLabel" and c.getIcon() is not None]
+        check("calibration question shows its picture and buttons", btns == ["Done", "Cancel"] and len(pics) == 1, (btns, len(pics)))
+        render(content, "machine_cal-ask.png")
+        obj.show_step()
     if script == "Feeder_Part_Check.py":
         render(content, "help-%s-closed.png" % key)
         tips = [c.getToolTipText() for c in uihelp._walk(content) if hasattr(c, "getText") and unicode(c.getText()).startswith(u"return fails")]
