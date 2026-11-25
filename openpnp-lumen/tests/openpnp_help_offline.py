@@ -201,5 +201,20 @@ for script, key in TOOLS:
         if Frame.instances:
             m2 = uihelp.missing(Frame.instances[0].content, "orientation_check")
             check("Orientation check dialog described", not m2, m2[:4])
+# The scripts' module level through OpenPnP's own script engine (JSR-223, like Scripts > Lumen > ...):
+# there globals() is a Java scope object, not a dict (Preflight crashed on globals().items(), 2026-11-25).
+from javax.script import ScriptEngineManager, SimpleBindings
+eng = ScriptEngineManager().getEngineByExtension("py")
+for script, key in TOOLS:
+    src = open(os.path.join(ROOT, "scripts", "Lumen", script)).read().rstrip().split("\n")
+    b = SimpleBindings()
+    b.put("scripting", Scr())
+    b.put("machine", machine)
+    b.put("gui", G())
+    try:
+        eng.eval("\n".join(src[:-1]) + "\n", b)
+        check("%-30s module level runs in OpenPnP's script engine" % script, True)
+    except Exception as e:
+        check("%-30s module level runs in OpenPnP's script engine" % script, False, str(e)[:200])
 S.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 S.exit(0 if all(results) else 1)
