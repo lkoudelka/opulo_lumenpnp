@@ -30,6 +30,8 @@ import lumen.feedercheck
 import lumen.feedwatch
 import lumen.pickvac
 import lumen.feederopts
+import lumen.jobinfo
+import lumen.zoomview
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
@@ -38,13 +40,15 @@ reload(lumen.feedercheck)
 reload(lumen.feedwatch)
 reload(lumen.pickvac)
 reload(lumen.feederopts)
-from lumen import feedercheck, feederopts, feedwatch, oppnp, pickvac
+reload(lumen.jobinfo)
+reload(lumen.zoomview)
+from lumen import feedercheck, feederopts, feedwatch, jobinfo, oppnp, pickvac, zoomview
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout, Font, GridLayout
 from java.lang import Boolean, Double, Integer, String
 from javax.swing import (BorderFactory, DefaultCellEditor, JButton, JCheckBox, JComboBox, JFrame, JLabel, JOptionPane, JPanel,
-                         JScrollPane, JTabbedPane, JTable, JTextField, WindowConstants)
+                         JScrollPane, JTabbedPane, JTable, JTextField, RowFilter, WindowConstants)
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer, TableCellRenderer
 
 COLS = ["Check", "Feeder", "Slot", "Part", "Tape", "Part at pick", "Pick vs pocket mm", "Result"]
@@ -205,9 +209,31 @@ class OwnBoolRenderer(TableCellRenderer):
         return comp
 
 
+class JobFilter(RowFilter):
+    """Rows of feeders whose part the open job places (option 'only feeders of the open job')."""
+
+    def __init__(self, owner):
+        RowFilter.__init__(self)
+        self.owner = owner
+
+    def include(self, entry):
+        return self.owner.shown(self.owner.model.rows[entry.getIdentifier()])
+
+
+def job_part_ids(gui):
+    """Part ids the open job still places (enabled boards / placements on the board side), or None (no job)."""
+    try:
+        job = gui.getJobTab().getJob()
+    except (Exception, JavaException):
+        return None
+    if job is None:
+        return None
+    return set(str(pl.getPart().getId()) for bl, pl, placed in jobinfo.job_placements(job) if pl.getPart() is not None)
+
+
 def verdict(res):
     if res.get("error"):
-        return "NOT FOUND: " + res["error"]
+        return "NOT FOUND: " + res["error"] + (" - use 'Set offset by hand'" if res.get("image") and res.get("upp") else "")
     notes = []
     if res.get("part_at_pick") is False:
         notes.append("no part in the pick pocket")
@@ -257,6 +283,7 @@ class PartCheck(object):
         b.add(JButton("Select none", actionPerformed=lambda e: self.select(lambda x: False)))
         b.add(self.check_btn)
         b.add(JButton("Apply offset to selected", actionPerformed=lambda e: self.apply()))
+        b.add(JButton("Set offset by hand (photo)...", actionPerformed=lambda e: self.hand_offset()))
         t1.add(b, BorderLayout.SOUTH)
         self.tabs.addTab("Check", None, t1, lumen.helptext.HELP["part_check"]["tabs"]["Check"])
         # -- tab 2: options per feeder ---------------------------------------------------------------
@@ -320,6 +347,9 @@ class PartCheck(object):
         self.tabs.addTab("Options per feeder", None, t2, lumen.helptext.HELP["part_check"]["tabs"]["Options per feeder"])
         root.add(self.tabs, BorderLayout.CENTER)
         b2 = JPanel(FlowLayout(FlowLayout.RIGHT))
+        self.job_only = JCheckBox("only feeders of the open job", bool(self.settings.get("part_check_job_only", False)))
+        self.job_only.addActionListener(lambda e: self.apply_filter())
+        b2.add(self.job_only)
         b2.add(JButton("Go to pick location", actionPerformed=lambda e: self.go_to()))
         b2.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.identify()))
         b2.add(JButton("Close", actionPerformed=lambda e: fr.dispose()))
@@ -327,7 +357,37 @@ class PartCheck(object):
         fr.setContentPane(lumen.uihelp.wrap(root, "part_check"))
         fr.pack()
         fr.setLocationRelativeTo(gui)
+        self.job_parts = None
+        self.apply_filter()
         fr.setVisible(True)
+
+    # -- filter: only the open job's feeders ------------------------------------------------
+    def shown(self, x):
+        if not self.job_only.isSelected():
+            return True
+        part = x["feeder"].getPart()
+        return part is not None and self.job_parts is not None and str(part.getId()) in self.job_parts
+
+    def apply_filter(self):
+        on = self.job_only.isSelected()
+        self.settings.set("part_check_job_only", on)
+        self.job_parts = job_part_ids(gui) if on else None
+        for t in (self.table, self.opt_table):
+            t.getRowSorter().setRowFilter(JobFilter(self) if on else None)
+        n = len([x for x in self.model.rows if self.shown(x)])
+        if on and self.job_parts is None:
+            self.info.setText("No job open: nothing to show with 'only feeders of the open job'.")
+        elif on:
+            self.info.setText("%d feeder(s) of the open job shown (%d part types in the job); untick to see all %d."
+                              % (n, len(self.job_parts), len(self.model.rows)))
+        else:
+            self.info.setText("All %d Photon feeders shown." % len(self.model.rows))
+        # hidden rows are not ticked: Check / Apply only act on what you see
+        for x in self.model.rows:
+            if not self.shown(x):
+                x["sel"] = False
+        self.model.fireTableDataChanged()
+        self.opt_model.fireTableDataChanged()
 
     # -- options ------------------------------------------------------------------------
     def _write(self, change):
@@ -477,7 +537,7 @@ class PartCheck(object):
     # -- check --------------------------------------------------------------------------
     def select(self, pred):
         for x in self.model.rows:
-            x["sel"] = pred(x)
+            x["sel"] = pred(x) and self.shown(x)
         self.model.fireTableDataChanged()
 
     def selected(self):
@@ -518,6 +578,68 @@ class PartCheck(object):
                 self.model.locked = False
                 oppnp.on_ui(lambda: self.check_btn.setEnabled(True))
         oppnp.in_background(work)
+
+    # -- pick location set by hand: click the pocket centre in the check photo ----------------
+    def hand_offset(self):
+        x = self.clicked()
+        if x is None:
+            return
+        res = x.get("res") or {}
+        if not res.get("image") or not res.get("upp") or not os.path.isfile(res["image"]):
+            JOptionPane.showMessageDialog(self.frame, "Check this feeder first (Check selected): the offset is set by "
+                                                      "clicking in the photo of that check.")
+            return
+        from java.io import File
+        from javax.imageio import ImageIO
+        img = ImageIO.read(File(res["image"]))
+        f = x["feeder"]
+        state = {"click": None}
+        size, upp = res["size"], res["upp"]
+
+        def overlay(g, k):
+            zoomview.cross(g, size[0] / 2.0, size[1] / 2.0, 22, Color.RED, k, 2.5)       # pick location now
+            if state["click"]:
+                zoomview.cross(g, state["click"][0], state["click"][1], 22, Color(30, 144, 255), k, 3.0)
+
+        def text():
+            base = ("<b>%s</b> (slot %s, part %s): %s<br>Zoom in (mouse wheel), then <b>click the centre of the pick "
+                    "pocket</b>. Red cross = pick location now (image centre), blue = your click."
+                    % (f.getName(), res.get("slot"), f.getPart().getId() if f.getPart() else "-",
+                       x.get("status", "")))
+            if state["click"]:
+                dx, dy = feedercheck.click_offset(state["click"][0], state["click"][1], size, upp)
+                base += "<br><b>Offset to apply: %+.2f / %+.2f mm</b> (%.2f mm)." % (dx, dy, (dx * dx + dy * dy) ** 0.5)
+            return "<html><body style='font-family:sans-serif;font-size:11pt'>%s</body></html>" % base
+
+        def click(ix, iy):
+            state["click"] = (ix, iy)
+            view.info.setText(text())
+            view.repaint()
+
+        def apply_click(w):
+            if not state["click"]:
+                JOptionPane.showMessageDialog(w, "Click the centre of the pick pocket in the photo first.")
+                return
+            dx, dy = feedercheck.click_offset(state["click"][0], state["click"][1], size, upp)
+            if JOptionPane.showConfirmDialog(w, "Move the pick location of %s by %+.2f / %+.2f mm?" % (f.getName(), dx, dy),
+                                             "Set offset by hand", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+                return
+            try:
+                before, after = feedercheck.apply_pocket_offset(f, dx, dy)
+                x["status"] = "offset set by hand: pick %.3f/%.3f -> %.3f/%.3f (check again)" % (
+                    before.getX(), before.getY(), after.getX(), after.getY())
+                res["pocket_dx"] = None
+                self.log("%s: %s (clicked %+.3f / %+.3f mm)" % (f.getName(), x["status"], dx, dy))
+                self.model.fireTableDataChanged()
+                w.dispose()
+            except (Exception, JavaException) as e:
+                JOptionPane.showMessageDialog(w, "Not applied: %s" % e)
+
+        fr, view = zoomview.image_window(
+            "Set offset by hand: %s" % f.getName(), img, "", overlay, click,
+            [("Apply this offset", apply_click, "Move the pick location onto the point you clicked (max 2 mm).")],
+            self.frame)
+        view.info.setText(text())
 
     def apply(self):
         rows = [x for x in self.selected() if (x.get("res") or {}).get("pocket_dx") is not None]

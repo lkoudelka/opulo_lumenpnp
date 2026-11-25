@@ -12,6 +12,7 @@ os.makedirs(os.path.join(sandbox, "lumen"))
 os.symlink(os.path.join(ROOT, "lib"), os.path.join(sandbox, "lumen", "lib"))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 from java.awt.image import BufferedImage
+from java.awt import Dimension
 from java.io import File
 from java.lang import System as S
 from javax.imageio import ImageIO
@@ -111,6 +112,7 @@ TOOLS = [("Feeder_Part_Check.py", "part_check"), ("Board_Z_Probe.py", "board_z")
          ("Job_Readiness.py", "job_readiness"), ("Last_Placements.py", "last_placements"), ("Orientation_Setup.py", "orientation"),
          ("Pick_Offset_Learning.py", "pick_learning"), ("Preflight.py", "preflight"),
          ("Feeder_Assistant.py", "feeder_assist"), ("Machine_Calibration.py", "machine_cal")]
+OBJS = {}
 for script, key in TOOLS:
     src = open(os.path.join(ROOT, "scripts", "Lumen", script)).read().rstrip().split("\n")
     g = {"__name__": "__main__", "scripting": Scr(), "machine": machine, "gui": G()}
@@ -121,6 +123,7 @@ for script, key in TOOLS:
         g["JOptionPane"] = Pane
         g["oppnp"].JOptionPane = Pane
         obj = g[src[-1].replace("()", "").strip()]()
+        OBJS[script] = (g, obj)
     except Exception as e:
         check("%s opens" % script, False, e)
         continue
@@ -201,6 +204,116 @@ for script, key in TOOLS:
         if Frame.instances:
             m2 = uihelp.missing(Frame.instances[0].content, "orientation_check")
             check("Orientation check dialog described", not m2, m2[:4])
+# ---------------------------------------------------------------- zoom / pan (lumen.zoomview) and its users
+from java.awt import Color as _C
+from java.awt.image import BufferedImage as _BI
+from javax.swing import JPanel as _JP
+from lumen import zoomview
+p = _JP()
+p.setSize(400, 300)
+zp = zoomview.ZoomPan(p)
+before = zp.to_view(100, 80)
+zp.wheel(100, 80, -3)                                    # zoom in 1.25^3 at (100, 80)
+after = zp.to_view(100, 80)
+check("zoom: wheel zooms in and keeps the point under the pointer", abs(zp.scale() - 1.953125) < 1e-6
+      and abs(after[0] - before[0]) < 1e-6 and abs(after[1] - before[1]) < 1e-6, (zp.scale(), after))
+x2 = zp.to_view(300, 200)
+check("zoom: other points map back through the zoom", abs(x2[0] - (100 + 200 / 1.953125)) < 1e-6, x2)
+zp.drag(-5000, -5000)
+check("zoom: drag is kept inside the picture", zp.to_view(400, 300)[0] <= 400.0001 and zp.to_view(400, 300)[1] <= 300.0001,
+      zp.to_view(400, 300))
+zp.reset()
+check("zoom: right click (reset) = fit", zp.scale() == 1.0 and zp.to_view(10, 20) == (10.0, 20.0))
+img = _BI(200, 100, _BI.TYPE_INT_RGB)
+v = zoomview.ImageView(img)
+v.setSize(400, 218)                                      # 18 px status line
+check("image view: centre of the panel = centre of the image", v.to_image(200, 100) == (100.0, 50.0), v.to_image(200, 100))
+v.zp.wheel(300, 150, -2)
+ip = v.to_image(300, 150)
+check("image view: zoomed click -> the same image pixel as before zooming", abs(ip[0] - 150) < 1e-6 and abs(ip[1] - 75) < 1e-6, ip)
+
+g_o, o_obj = OBJS["Orientation_Setup.py"]
+sq = g_o["DotSquare"]("t", "s", None)
+sq.setSize(320, 380)
+mx, my = sq.mark_xy("TR") if "TR" in g_o["POS"] else sq.mark_xy(list(g_o["POS"])[0])
+corner = "TR" if "TR" in g_o["POS"] else list(g_o["POS"])[0]
+sq.zp.wheel(mx, my, -6)                                  # zoom in on that corner
+sx, sy = mx, my                                          # the corner stays under the pointer
+sq.click(*sq.zp.to_view(sx, sy))
+check("test placement photo: zoomed in, a click on a corner sets that corner", sq.dot == corner, (sq.dot, corner))
+render(sq, "zoom-dotsquare.png")
+
+# Feeder Part Check: only the open job's feeders, offset set by hand in the photo
+g_p, pc = OBJS["Feeder_Part_Check.py"]
+jp = g_p["job_part_ids"](G())
+pc.job_only.setSelected(True)
+pc.apply_filter()
+vis = pc.table.getRowCount()
+want = len([x for x in pc.model.rows if x["feeder"].getPart() is not None and str(x["feeder"].getPart().getId()) in jp])
+check("part check: 'only feeders of the open job' shows exactly the job's feeders", vis == want and 0 < vis < len(pc.model.rows),
+      (vis, want, len(pc.model.rows)))
+pc.select(lambda x: True)
+check("part check: Select all with the filter ticks only the shown feeders", len(pc.selected()) == vis)
+pc.job_only.setSelected(False)
+pc.apply_filter()
+check("part check: filter off shows all feeders again", pc.table.getRowCount() == len(pc.model.rows))
+row = pc.model.rows[0]
+f0 = row["feeder"]
+f0.setSlotAddress(3)                                     # offline: no bus; slot 3 has a location in this config
+shot = _BI(1000, 600, _BI.TYPE_INT_RGB)
+from javax.imageio import ImageIO as _IO
+from java.io import File as _F
+ppath = os.path.join(outdir, "fake-check.png")
+_IO.write(shot, "png", _F(ppath))
+row["res"] = {"error": "no sprocket holes found", "image": ppath, "upp": (0.01, 0.01), "size": (1000, 600), "slot": 1}
+row["status"] = g_p["verdict"](row["res"])
+check("part check: NOT FOUND points to 'Set offset by hand'", "Set offset by hand" in row["status"], row["status"])
+pc.tabs.setSelectedIndex(0)
+pc.table.setRowSelectionInterval(pc.table.convertRowIndexToView(0), pc.table.convertRowIndexToView(0))
+created = []
+zoomview.JFrame = lambda t: (created.append(Frame(t)) or created[-1])
+g_p["JOptionPane"].showConfirmDialog = classmethod(lambda cls, *a: 0)
+before = f0.getPickLocation()
+pc.hand_offset()
+win = created[-1] if created else None
+views = [c for c in uihelp._walk(win.content) if isinstance(c, zoomview.ImageView)] if win else []
+if views:
+    hv = views[0]
+    hv.on_click(500 + 30, 300 - 50)                      # 0.30 mm right, 0.50 mm up of the pick location
+    apply_btn = [c for c in uihelp._walk(win.content) if hasattr(c, "getText") and c.getText() == "Apply this offset"][0]
+    apply_btn.doClick()
+after = f0.getPickLocation()
+d = (after.getX() - before.getX(), after.getY() - before.getY())
+check("part check: click in the photo + Apply moves the pick location by the clicked offset",
+      abs(d[0] - 0.30) < 1e-6 and abs(d[1] - 0.50) < 1e-6 and row["status"].startswith("offset set by hand"), (d, row.get("status")))
+
+# Feeder Assistant: Look at this feeder (camera) - synthetic camera picture
+g_a, fa = OBJS["Feeder_Assistant.py"]
+fa.ptable.setRowSelectionInterval(0, 0)
+fa.show_feeders()
+fr_i = [i for i, r in enumerate(fa.fmodel.rows) if not r.get("sep")][0]
+fa.ftable.setRowSelectionInterval(fr_i, fr_i)
+cam = _BI(800, 500, _BI.TYPE_INT_RGB)
+g_a["feedercheck"].look = lambda m, f: (cam, (0.0108, 0.0108), f.getPickLocation())
+g_a["oppnp"].run_machine_task = lambda m, fn: fn()
+g_a["oppnp"].confirm_ready = lambda *a: True
+g_a["oppnp"].in_background = lambda fn: fn()
+from javax.swing import SwingUtilities as _SU
+from java.lang import Runnable as _R
+class _Now(_R):
+    def run(self):
+        pass
+created[:] = []
+fa.look()
+_SU.invokeAndWait(_Now())
+_SU.invokeAndWait(_Now())
+lw = [w for w in created if "intended component" in w.title]
+check("feeder assistant: 'Look at this feeder' opens the zoomable camera picture with the job part", len(lw) == 1 and
+      any(isinstance(c, zoomview.ImageView) for c in uihelp._walk(lw[0].content)), [w.title for w in created])
+if lw:
+    lw[0].content.setPreferredSize(Dimension(1000, 700))
+    render(lw[0].content, "feeder-assist-look.png")
+
 # The scripts' module level through OpenPnP's own script engine (JSR-223, like Scripts > Lumen > ...):
 # there globals() is a Java scope object, not a dict (Preflight crashed on globals().items(), 2026-11-25).
 from javax.script import ScriptEngineManager, SimpleBindings

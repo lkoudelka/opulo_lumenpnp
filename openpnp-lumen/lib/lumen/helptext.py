@@ -102,6 +102,11 @@ the feeder's row. Stored in ~/.openpnp2/lumen/settings.json (defaults: feedwatch
         "Apply offset to selected": "Move the pick location of the ticked, checked feeders onto the pocket centre "
                                     "(Photon feeder offset; max 2 mm; read back; logged).",
         "Go to pick location": "Top camera over the pick location of the clicked row (either tab), to look at it in the camera view.",
+        "Set offset by hand": "For the clicked, checked feeder (also when the pocket was NOT FOUND): its check photo opens; zoom "
+                              "in with the mouse wheel and click the centre of the pick pocket. Apply moves the pick location "
+                              "there (max 2 mm, read back). No motion.",
+        "only feeders of the open job": "Show only feeders whose part the open job places (both tabs). Hidden rows are "
+                                        "unticked, so Check / Apply act only on the job's feeders.",
         "Identify (blink LED)": "The clicked feeder (either tab) blinks its LED white 3 times (Photon IDENTIFY command). No motion.",
         "Close": "Close the window (settings stay).",
     },
@@ -319,6 +324,9 @@ rotation in Orientation Setup.</p>
         "only parts without an enabled feeder": "Hide parts that already have an enabled feeder holding exactly this part.",
         "Choose this feeder for the part": "Use the selected feeder (below) for the selected part (above). Not applied yet.",
         "Identify (blink LED)": "The selected feeder blinks its LED white 3 times (Photon IDENTIFY). No motion.",
+        "Look at this feeder": "Top camera over the pick location of the selected feeder (or the part's chosen feeder) and a "
+                               "zoomable picture next to the job part: is it the intended component? The yellow outline is "
+                               "the job part's body size from its package. Camera move only.",
         "Pre-select strong matches": "Choose the best proposal for every part where it is strong (score >= 85), has no "
                                      "warning (also not: an IC with another package name) and no equal second. A disabled feeder is "
                                      "allowed (shown as a warning at Apply). "
@@ -422,6 +430,8 @@ board): the part is picked up again afterwards.</p>
 recognises the turn), the <b>green ring</b> = pin 1 of the <b>board</b> (from CAD; switch the click mode and move it if the
 silkscreen / pad 1 says otherwise). Light pads = CAD pads at the placement rotation (red = pad 1).
 Same corners -> CORRECT. Different -> the feeder rotation that would have been right is shown.</p>
+<p><b>Zoom the photo like OpenPnP's camera view:</b> mouse wheel = zoom in / out at the pointer, drag = move the zoomed
+photo, right click = fit again. Clicks set the marks at the zoomed position.</p>
 <p><b>Finish</b> picks the part up from the board in the same grip (corrected by where the camera found it) and, by
 <i>After the decision</i>, returns it to its feeder with OpenPnP's take-back: <b>Photon: back into its pocket, the next feed
 is skipped</b> (the tape does not move, the job picks this same part); strip / tray feeders: back into its pocket, feed count
