@@ -144,7 +144,7 @@ g["zoomview"].image_window = lambda title, img, html, overlay=None, on_click=Non
     shown.append((title, img, html, [b[0] for b in buttons]))
 d.show_image()
 check("Show image: zoomable window with the result drawn in, Camera to part / Set as OK there",
-      shown and fail["ref"] in shown[0][0] and "Cyan dashed" in shown[0][2] and shown[0][3] == ["Camera to part", "Set as OK"]
+      shown and fail["ref"] in shown[0][0] and "Cyan dashed" in shown[0][2] and shown[0][3] == ["Camera to part", "Set as OK", "Set as NOT OK..."]
       and shown[0][1] is not fail["res"]["_image"], shown[:1] and shown[0][3])
 was = fail["res"]["verdict"]
 d.set_ok()
@@ -162,6 +162,14 @@ d.camera_to_part()
 check("Camera to part: top camera over the selected placement", moved == [fail["ref"]] and "camera over" in d.info.getText(),
       (moved, d.info.getText(), Pane.msgs[-1:], machine.isHomed()))
 machine.setHomed(_h)
+ok_row = caps[0]
+job.storePlacedStatus(ok_row["bl"], ok_row["pl"].getId(), True)
+vi = d.table.convertRowIndexToView(d.model.rows.index(ok_row))
+d.table.setRowSelectionInterval(vi, vi)
+d.set_not_ok()                                            # dialog answered OK with the default reason
+check("Set as NOT OK (default 'not assembled'): FAIL with the reason, NOT placed in the job (placed again next run)",
+      ok_row["res"]["verdict"].startswith("FAIL: not assembled (part missing) (set by hand; was OK")
+      and not job.retrievePlacedStatus(ok_row["bl"], ok_row["pl"].getId()), ok_row["res"]["verdict"])
 d.export()
 csvp = os.path.join(d.out_dir, "inspection.csv")
 rows = open(csvp).read().strip().split("\n")

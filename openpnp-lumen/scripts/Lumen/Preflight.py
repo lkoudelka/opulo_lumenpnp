@@ -57,6 +57,9 @@ DEFAULT = {
         {"id": "vacuum_sensors", "on": True, "severity": "warn"},
         {"id": "job_readiness", "on": True, "severity": "fail"},
         {"id": "feeder_bus", "on": True, "severity": "fail", "min_version": ""},
+        {"id": "pick_checks", "on": True, "severity": "warn",
+         "_help": "what would notice an empty pick / a part left on the nozzle: part-on and part-off vacuum checks of "
+                  "the loaded tips, bottom-vision part size check"},
         {"id": "script_engines", "on": True, "severity": "warn",
          "_help": "OpenPnP's 'Pool scripting engines?' off: every event script (Lumen hooks) loads a new Python "
                   "engine, ~0.6 s per feed / pick / placement"},
@@ -190,6 +193,34 @@ def st_feeder_bus(cfg, ctx):
     return not missing and not old, detail
 
 
+def st_pick_checks(cfg, ctx):
+    """Bench 2026-11-26: an empty pick (nozzle on the cover foil of a cut strip) read 232 with part-on 215..232 and
+    free air ~233, bottom vision accepted a 1 x 0 px 'part' (size check off), part-off was off: placed as if fine."""
+    out = []
+    for n in machine.getDefaultHead().getNozzles():
+        t = n.getNozzleTip()
+        if t is None or not hasattr(t, "getMethodPartOn"):
+            continue
+        on, off = str(t.getMethodPartOn()), str(t.getMethodPartOff())
+        if on == "None" or not t.isPartOnCheckAfterPick():
+            out.append("%s/%s: no part-on check after pick (an empty pick is not noticed)" % (n.getName(), t.getName()))
+        elif on == "Absolute":
+            out.append("%s/%s: part-on %.0f..%.0f - the high limit must stay clearly below free air (empty nozzle, "
+                       "vacuum on)" % (n.getName(), t.getName(), t.getVacuumLevelPartOnLow(), t.getVacuumLevelPartOnHigh()))
+        if off == "None" or not t.isPartOffCheckAfterPlace():
+            out.append("%s/%s: no part-off check after place (a part that stays on the nozzle is not noticed)"
+                       % (n.getName(), t.getName()))
+    bad = [x for x in out if "no part-" in x]
+    try:
+        from org.openpnp.model import Configuration
+        bvs = Configuration.get().getVisionSettings("BVS_Default")
+        if bvs is not None and str(bvs.getCheckPartSizeMethod()) == "Disabled":
+            bad.append("bottom vision part size check off (BVS_Default): an empty nozzle passes bottom vision")
+    except (Exception, JavaException):
+        pass
+    return not bad, "; ".join(bad + [x for x in out if x not in bad]) or "part-on / part-off / size checks on"
+
+
 HOOKS = ("Feeder.BeforeFeed.py", "Nozzle.AfterPick.py", "Job.Placement.Complete.py", "Job.Error.py")
 
 
@@ -277,7 +308,7 @@ def st_orientation(cfg, ctx):
 STEPS = {"machine_enabled": st_machine_enabled, "job_open": st_job_open, "home": st_home, "lights": st_lights,
          "nozzle_tips": st_nozzle_tips, "vacuum_sensors": st_vacuum_sensors, "job_readiness": st_job_readiness,
          "feeder_bus": st_feeder_bus, "board_z": st_board_z, "orientation": st_orientation,
-         "script_engines": st_script_engines}
+         "script_engines": st_script_engines, "pick_checks": st_pick_checks}
 
 
 def confirm_home(parent):

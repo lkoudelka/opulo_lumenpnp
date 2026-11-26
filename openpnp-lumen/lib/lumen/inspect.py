@@ -141,6 +141,116 @@ def find_body(image, upp, length, width, expect_rot):
             "box_px": [(p.x + x0, p.y + y0) for p in pts]}              # the body found, whole-image pixels
 
 
+# ---------------------------------------------------------------------------------------
+# chip parts (R / C / L 0201 .. 2512): the two metal terminations
+# ---------------------------------------------------------------------------------------
+# Bench 2026-11-26 (0603 on a dark mask): the body-blob search took ONE bare pad (~1 x 0.9 mm) of a missing part
+# as the 1.6 x 0.8 body ("CHECK offset 0.7 mm" instead of missing), and boxed pads / half parts of good ones.
+# Chip parts have a clearer signature: two bright terminations L - t apart; when the part is missing, the middle
+# is solder mask (as dark as the mask around) and the pads are matte grey.
+_CHIP = re.compile(r"^(R|C|L|D|RES|CAP|CAPC|IND|FB|LED)_?(0201|0402|0603|0805|1206|1210|1812|2010|2220|2512)(_|$)", re.I)
+CHIP_LIMITS = {"mid_missing": 15, "term_frac": 0.2}
+
+
+def is_chip(package_id):
+    return bool(_CHIP.search(str(package_id or "")))
+
+
+def _percentile_hist(mat, q):
+    import jarray
+    from org.opencv.core import Mat, MatOfFloat, MatOfInt
+    from org.opencv.imgproc import Imgproc
+    from java.util import ArrayList
+    hist, mats = Mat(), ArrayList()
+    mats.add(mat)
+    Imgproc.calcHist(mats, MatOfInt(jarray.array([0], "i")), Mat(), hist, MatOfInt(jarray.array([256], "i")),
+                     MatOfFloat(jarray.array([0.0, 256.0], "f")))
+    total, acc = float(mat.rows() * mat.cols()), 0.0
+    for i in range(256):
+        acc += hist.get(i, 0)[0]
+        if acc >= q / 100.0 * total:
+            return float(i)
+    return 255.0
+
+
+def _sample(g, cx, cy, a, upp, u, v, hu, hv, n=9):
+    """grey values in a window centred (u, v) mm along / across the axis a (rad, machine CCW), half sizes hu, hv."""
+    out = []
+    for i in range(n):
+        for j in range(n):
+            x = u + hu * (2.0 * i / (n - 1) - 1)
+            y = v + hv * (2.0 * j / (n - 1) - 1)
+            px = int(cx + (x * math.cos(a) - y * math.sin(a)) / upp)
+            py = int(cy - (x * math.sin(a) + y * math.cos(a)) / upp)
+            if 0 <= px < g.cols() and 0 <= py < g.rows():
+                out.append(g.get(py, px)[0])
+    return out
+
+
+def chip_check(image, upp, length, width, expect_rot):
+    """Chip part at the image centre (the placement location).  Returns like find_body {found, dx, dy (mm, machine),
+    angle_err, size, method, box_px} plus missing (True: the middle is solder mask = bare pads) and the levels."""
+    _cv()
+    from java.util import ArrayList
+    from org.opencv.core import Mat, MatOfPoint2f, Rect, Size
+    from org.opencv.imgproc import Imgproc
+    g = _gray(image)
+    Imgproc.GaussianBlur(g, g, Size(3, 3), 0)
+    h, w = g.rows(), g.cols()
+    cx, cy = w / 2.0, h / 2.0
+    a = math.radians(expect_rot)
+    half = int((length * 1.3 + 0.4) / upp)
+    x0, y0 = max(0, int(cx) - half), max(0, int(cy) - half)
+    roi = g.submat(Rect(x0, y0, min(w - x0, 2 * half), min(h - y0, 2 * half)))
+    mask = _percentile_hist(roi, 15)                    # the solder mask: the darkest common level around
+    top = _percentile_hist(roi, 99.5)
+    t = 0.2 * length                                    # termination length along the part
+    mid = _sample(g, cx, cy, a, upp, 0.0, 0.0, 0.2 * length, 0.3 * width)
+    mid_level = sorted(mid)[len(mid) // 2] if mid else 0.0
+    levels = {"mask": mask, "middle": mid_level, "bright": top}
+    # terminations: bright blobs about t x width, L - t apart, around the centre
+    b = Mat()
+    Imgproc.threshold(roi, b, mask + 0.55 * (top - mask), 255, Imgproc.THRESH_BINARY)
+    cs = ArrayList()
+    Imgproc.findContours(b, cs, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+    area0 = t * width / upp / upp
+    blobs = []
+    for c in cs:
+        ar = Imgproc.contourArea(c)
+        if CHIP_LIMITS["term_frac"] * area0 <= ar <= 3.0 * area0:
+            r = Imgproc.minAreaRect(MatOfPoint2f(c.toArray()))
+            blobs.append((r.center.x + x0, r.center.y + y0, ar))
+    want = length - t
+    best = None
+    for i in range(len(blobs)):
+        for j in range(i + 1, len(blobs)):
+            (ax, ay, aa), (bx, by, ba) = blobs[i], blobs[j]
+            d = math.hypot(bx - ax, by - ay) * upp
+            if not (0.65 * want <= d <= 1.3 * want) or max(aa, ba) > 3.0 * min(aa, ba):
+                continue
+            mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+            off = math.hypot(mx - cx, my - cy) * upp
+            if off > 0.5 * length:
+                continue
+            score = abs(d - want) / want + off / length
+            if best is None or score < best[0]:
+                best = (score, mx, my, math.degrees(math.atan2(-(by - ay), bx - ax)), d)
+    if best is None:
+        missing = mid_level - mask < CHIP_LIMITS["mid_missing"]
+        return {"found": False, "missing": missing, "levels": levels, "method": "terminations",
+                "why": ("part missing: bare pads (the middle is as dark as the solder mask)" if missing else
+                        "terminations not found (part shifted, tilted or not a chip part?)")}
+    _, mx, my, ang, d = best
+    err = ((ang - expect_rot) + 90.0) % 180.0 - 90.0
+    hl, hw = (d + t) / 2.0 / upp, width / 2.0 / upp
+    ar = math.radians(ang)
+    box = [(mx + x * math.cos(ar) - y * math.sin(ar), my - (x * math.sin(ar) + y * math.cos(ar)))
+           for x, y in ((-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw))]
+    return {"found": True, "missing": False, "dx": (mx - cx) * upp, "dy": -(my - cy) * upp, "angle_err": err,
+            "size": (d + t, width), "size_err": abs(d - want) / want, "method": "terminations", "box_px": box,
+            "levels": levels}
+
+
 def rotate(mat, deg):
     from org.opencv.core import Mat, Point, Size
     from org.opencv.imgproc import Imgproc
@@ -230,10 +340,16 @@ def verdict(res):
             notes.append("matches better turned by 180 deg (%.2f vs %.2f): polarity?" % (g["score180"], g["score"]))
     b = res.get("body")
     if b is not None:
-        if not b.get("found"):
+        if b.get("missing"):
+            fail = True
+            notes.append(b.get("why") or "part missing")
+        elif not b.get("found"):
             if not g or g["score"] < LIMITS["score_ok"]:
-                fail = True
-                notes.append("part body not found: missing?")
+                if b.get("method") == "terminations":
+                    notes.append(b.get("why"))
+                else:
+                    fail = True
+                    notes.append("part body not found: missing?")
         else:
             off = math.hypot(b["dx"], b["dy"])
             if off > LIMITS["offset_mm"]:
@@ -297,7 +413,9 @@ def save_golden(root, package_id, image, upp, rot, length, width, source):
 def analyse(image, upp, package_id, length, width, rot, root):
     """Both methods on one image -> result dict incl. verdict."""
     res = {}
-    if length:
+    if length and is_chip(package_id):
+        res["body"] = chip_check(image, upp, length, width, rot)
+    elif length:
         res["body"] = find_body(image, upp, length, width, rot)
     g = load_golden(root, package_id) if root else None
     if g is not None:
