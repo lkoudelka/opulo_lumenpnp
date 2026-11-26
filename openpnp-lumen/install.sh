@@ -4,6 +4,7 @@
 #                            Events/Feeder.BeforeFeed.py (acts only for feeders ticked "While feeding"),
 #                            Events/Nozzle.AfterPick.py (acts only with "Pick vacuum check" enabled) and
 #                            Events/Startup.py (safe homing: nozzles to safe Z / confirmation before OpenPnP's Home)
+#                            Events/Job.Error.py (adds the cause in words, e.g. no loaded nozzle tip for a part)
 #   ./install.sh --journal   additionally the placement journal hook (Events/Job.Placement.Complete.py)
 #   ./uninstall.sh           removes exactly what this installed
 # OpenPnP: Scripts > Refresh Scripts (or restart) afterwards.  machine.xml is not touched.
@@ -24,6 +25,7 @@ link "$HERE/lib" "$CFG/lumen/lib"
 link "$HERE/events/Feeder.BeforeFeed.py" "$CFG/scripts/Events/Feeder.BeforeFeed.py"
 link "$HERE/events/Nozzle.AfterPick.py" "$CFG/scripts/Events/Nozzle.AfterPick.py"
 link "$HERE/events/Startup.py" "$CFG/scripts/Events/Startup.py"
+link "$HERE/events/Job.Error.py" "$CFG/scripts/Events/Job.Error.py"
 if [ "$1" = "--journal" ]; then
     link "$HERE/events/Job.Placement.Complete.py" "$CFG/scripts/Events/Job.Placement.Complete.py"
 fi

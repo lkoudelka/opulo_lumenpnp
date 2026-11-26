@@ -42,11 +42,13 @@ from lumen.oppnp import JavaException
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
 from java.lang import Integer, String
 from javax.swing import (BorderFactory, JButton, JCheckBox, JComboBox, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
-                         JSplitPane, JTable, ListSelectionModel, WindowConstants)
+                         JSplitPane, JTabbedPane, JTable, ListSelectionModel, WindowConstants)
+from java.awt.event import MouseAdapter
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 
 PCOLS = ["Part", "Refs", "Qty", "Read as", "Feeder now", "Best proposal", "Score", "Your choice"]
 FCOLS = ["Score", "Feeder", "Slot", "Feeder part", "Read as", "Why", "Warnings", "Enabled"]
+JCOLS = ["#", "Slot", "Feeder", "Part", "References (not placed first)", "Left", "Status"]
 MODES = ["the job uses the feeder's part (recommended)", "the feeder gets the job's part"]
 STRONG = 85
 
@@ -118,6 +120,28 @@ class FeederModel(AbstractTableModel):
                 pm.summary(x["desc"]), x.get("why", ""), "; ".join(x.get("warn", [])), "yes" if f.isEnabled() else "no"][c]
 
 
+class JobFeederModel(AbstractTableModel):
+    """Tab 'Job feeders': jobinfo.tour() rows."""
+    def __init__(self):
+        AbstractTableModel.__init__(self)
+        self.rows = []
+
+    def getRowCount(self):
+        return len(self.rows)
+
+    def getColumnCount(self):
+        return len(JCOLS)
+
+    def getColumnName(self, c):
+        return JCOLS[c]
+
+    def getValueAt(self, r, c):
+        x = self.rows[r]
+        f = x["feeder"]
+        return [str(r + 1), "" if x["slot"] is None else str(x["slot"]), f.getName() if f is not None else "-",
+                x["part_id"], short(x["refs"], 6), str(x["remaining"]), x["status"]][c]
+
+
 class ScoreRenderer(DefaultTableCellRenderer):
     """Matching feeders: green (strong), yellow (check), grey (weak); the separator and the rest white."""
 
@@ -142,10 +166,13 @@ class FeederAssistant(object):
         self.store = self.load_store()
         self.pmodel = PartModel()
         self.fmodel = FeederModel()
-        f = self.frame = JFrame("Feeder assistant (new board / panel)")
+        f = self.frame = JFrame("Feeder assistant")
         f.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE)
+        outer = JPanel(BorderLayout(6, 6))
+        outer.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
+        self.tabs = JTabbedPane()
+        self.tabs.addTab("Job feeders (camera)", self.job_tab())
         root = JPanel(BorderLayout(6, 6))
-        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
         top = JPanel(FlowLayout(FlowLayout.LEFT))
         self.only = JCheckBox("only parts without an enabled feeder", True, actionPerformed=lambda e: self.refresh())
         top.add(self.only)
@@ -187,13 +214,114 @@ class FeederAssistant(object):
         self.mode = JComboBox(MODES)
         b.add(self.mode)
         b.add(JButton("Apply choices...", actionPerformed=lambda e: self.apply()))
-        b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
-        f.setContentPane(lumen.uihelp.wrap(root, "feeder_assist"))
+        self.tabs.addTab("Assign feeders (new board / panel)", root)
+        outer.add(self.tabs, BorderLayout.CENTER)
+        cb = JPanel(FlowLayout(FlowLayout.RIGHT))
+        cb.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
+        outer.add(cb, BorderLayout.SOUTH)
+        f.setContentPane(lumen.uihelp.wrap(outer, "feeder_assist"))
         self.refresh()
+        self.refresh_tour()
         f.pack()
         f.setLocationRelativeTo(gui)
         f.setVisible(True)
+
+    # -- tab 'Job feeders': camera round over the feeders of the open job --------------------
+    def job_tab(self):
+        p = JPanel(BorderLayout(4, 4))
+        self.tour_info = JLabel("The feeders of the open job in slot order. Next: the top camera goes to the next feeder.")
+        p.add(self.tour_info, BorderLayout.NORTH)
+        self.tmodel = JobFeederModel()
+        self.ttable = JTable(self.tmodel)
+        self.ttable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+        for i, w in enumerate((35, 45, 260, 280, 330, 45, 380)):
+            self.ttable.getColumnModel().getColumn(i).setPreferredWidth(w)
+        owner = self
+
+        class _Dbl(MouseAdapter):
+            def mouseClicked(self, e):
+                if e.getClickCount() == 2:
+                    owner.tour_camera(owner.ttable.getSelectedRow())
+        self.ttable.addMouseListener(_Dbl())
+        sp = JScrollPane(self.ttable)
+        sp.setPreferredSize(Dimension(1380, 520))
+        p.add(sp, BorderLayout.CENTER)
+        b = JPanel(FlowLayout(FlowLayout.LEFT))
+        b.add(JButton("<< Previous", actionPerformed=lambda e: self.tour_step(-1)))
+        b.add(JButton("Camera to feeder", actionPerformed=lambda e: self.tour_camera(self.ttable.getSelectedRow())))
+        b.add(JButton("Next >>", actionPerformed=lambda e: self.tour_step(1)))
+        b.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.tour_identify()))
+        b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh_tour()))
+        p.add(b, BorderLayout.SOUTH)
+        return p
+
+    def refresh_tour(self):
+        self.tmodel.rows = jobinfo.tour(gui.getJobTab().getJob(), machine)
+        self.tmodel.fireTableDataChanged()
+        n = len([x for x in self.tmodel.rows if x["feeder"] is not None])
+        lost = len(self.tmodel.rows) - n
+        self.tour_info.setText("<html>%d feeder(s) of the open job, in slot order. <b>Next &gt;&gt;</b> (or double-click a "
+                               "line): the top camera goes to that feeder's pick location.%s</html>" % (
+                                   n, " <font color='#c00000'>%d part(s) without a feeder: tab <i>Assign feeders</i>."
+                                      "</font>" % lost if lost else ""))
+
+    def tour_step(self, d):
+        rows = self.tmodel.rows
+        idx = [i for i, x in enumerate(rows) if x["feeder"] is not None]
+        if not idx:
+            JOptionPane.showMessageDialog(self.frame, "No feeder of the open job (Refresh after opening the job).")
+            return
+        cur = self.ttable.getSelectedRow()
+        if cur < 0:
+            nxt = idx[0] if d > 0 else idx[-1]
+        else:
+            later = [i for i in idx if (i > cur if d > 0 else i < cur)]
+            nxt = (later[0] if d > 0 else later[-1]) if later else (idx[0] if d > 0 else idx[-1])   # wraps round
+        self.tour_camera(nxt)
+
+    def tour_camera(self, i):
+        if i < 0 or i >= len(self.tmodel.rows):
+            JOptionPane.showMessageDialog(self.frame, "Select a feeder line (or press Next).")
+            return
+        x = self.tmodel.rows[i]
+        f = x["feeder"]
+        if f is None:
+            JOptionPane.showMessageDialog(self.frame, "%s has no feeder: tab 'Assign feeders'." % x["part_id"])
+            return
+        if getattr(self, "tour_busy", False):
+            return
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return
+        if not machine.isHomed():
+            JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.")
+            return
+        self.ttable.setRowSelectionInterval(i, i)
+        self.ttable.scrollRectToVisible(self.ttable.getCellRect(i, 0, True))
+        n = len([y for y in self.tmodel.rows if y["feeder"] is not None])
+        self.tour_busy = True
+        self.tour_info.setText("camera to %s ..." % f.getName())
+
+        def work():
+            try:
+                p = oppnp.run_machine_task(machine, lambda: feedercheck.go_to(machine, f))
+                text = "%d / %d: camera at slot %s, %s - %s (%s), %s left. Status: %s" % (
+                    i + 1, n, "?" if x["slot"] is None else x["slot"], f.getName(), x["part_id"], short(x["refs"], 4), x["remaining"], x["status"])
+                self.log("%s (X %.3f Y %.3f)" % (text, p.getX(), p.getY()))
+            except (Exception, JavaException) as e:
+                text = "camera not moved to %s: %s" % (f.getName(), e)
+            finally:
+                self.tour_busy = False
+            oppnp.on_ui(lambda: self.tour_info.setText(text))
+        oppnp.in_background(work)
+
+    def tour_identify(self):
+        i = self.ttable.getSelectedRow()
+        f = self.tmodel.rows[i]["feeder"] if i >= 0 else None
+        if f is None:
+            JOptionPane.showMessageDialog(self.frame, "Select a feeder line.")
+            return
+        self.identify_feeder(f, self.tour_info)
 
     # -- data -------------------------------------------------------------------------------
     def load_store(self):
@@ -323,16 +451,18 @@ class FeederAssistant(object):
         if i < 0 or self.fmodel.rows[i].get("sep"):
             JOptionPane.showMessageDialog(self.frame, "Select a feeder below.")
             return
-        f = self.fmodel.rows[i]["feeder"]
+        self.identify_feeder(self.fmodel.rows[i]["feeder"], self.info)
+
+    def identify_feeder(self, f, label):
         if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot identify"):
             return
 
         def work():
             try:
                 addr = oppnp.run_machine_task(machine, lambda: feedercheck.identify(machine, f))
-                oppnp.on_ui(lambda: self.info.setText("%s (address %d) is blinking" % (f.getName(), addr)))
+                oppnp.on_ui(lambda: label.setText("%s (address %d) is blinking" % (f.getName(), addr)))
             except (Exception, JavaException) as e:
-                oppnp.on_ui(lambda: self.info.setText("identify failed: %s" % e))
+                oppnp.on_ui(lambda: label.setText("identify failed: %s" % e))
         oppnp.in_background(work)
 
     def look(self):

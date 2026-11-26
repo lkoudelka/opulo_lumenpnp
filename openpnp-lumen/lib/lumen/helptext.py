@@ -204,16 +204,22 @@ C_0402_1005Metric) near the location: found / offset / rotation.</li>
 compared with it: match score, offset, and whether the part matches better <b>turned by 180 deg</b> (polarity).</li>
 </ul>
 <p>OK / CHECK / FAIL is an aid, not a sign-off - every image is kept
-(~/.openpnp2/lumen/inspection/&lt;job&gt;-&lt;time&gt;/). Limits: offset 0.15 mm, angle 8 deg, golden score OK &ge; 0.70,
-FAIL &lt; 0.45.</p>
-""" + MOVES % "the <b>top camera</b> only (safe Z).",
+(~/.openpnp2/lumen/inspection/&lt;job&gt;-&lt;time&gt;/: <i>&lt;ref&gt;.png</i> with the result drawn in, <i>&lt;ref&gt;-raw.png</i>
+as taken). Limits: offset 0.15 mm, angle 8 deg, golden score OK &ge; 0.70, FAIL &lt; 0.45.</p>
+<p>In the image: <b>cyan dashed</b> = where the part should be (body size, placement rotation), cross = placement location;
+the <b>box</b> = the body found (green OK, orange CHECK, red FAIL); the verdict on top. <i>Show image</i> (or double-click a
+row) opens it zoomable. <i>Camera to part</i> puts the top camera over the placement to look at it live. <i>Set as OK</i>:
+you checked it and accept it (logged, the image and the CSV say "set by hand").</p>
+""" + MOVES % "the <b>top camera</b> only (safe Z): Inspect selected, Camera to part.",
     "tips": {
         "only placed": "Show only placements marked as placed in the job (off: all placements).",
         "Select all": "Tick all listed placements.", "Select none": "Untick all placements.",
         "Select not OK": "Tick the placements whose last result is CHECK, FAIL or ERROR (to inspect them again).",
         "Inspect selected": "Camera over each ticked placement, analyse, save the image.",
         "Make golden from selected": "Use the clicked, inspected placement (a GOOD part) as the golden sample of its package.",
-        "Open image": "Open the saved image of the clicked row.",
+        "Show image": "The saved image of the clicked row with the result drawn in, zoomable (double-click a row does the same).",
+        "Camera to part": "Top camera over the clicked placement, part top in focus, to look at it in the camera view.",
+        "Set as OK": "Accept the selected not-OK placement(s) as OK after your check (asks first; logged; image and CSV updated).",
         "Export CSV": "Write the report (inspection.csv) into this run's folder.",
         "Close": "Close the window.",
     },
@@ -263,6 +269,9 @@ HELP["job_readiness"] = {
     "html": """
 <p>Parts of the open job with quantity, remaining, part height and feeders, and precisely why a feeder
 cannot be used (no slot, no location, disabled, ...). Read-only towards the job and the configuration.</p>
+<p>A part whose package has <b>no compatible nozzle tip loaded</b> is an issue too: the job would try an automatic
+tip change and stop with "Can't move ... soft limit" (no tip changer). Fix: tick a loaded tip in
+<i>Packages &gt; Nozzle Tips</i>, or load the needed tip by hand.</p>
 <p><i>Show on feeder LEDs</i>: green = needed and ready, red = needed but has an issue, off = not used by the job.</p>
 <p><i>Camera to feeder</i> (or double-click a line): the top camera goes over the pick location of the selected
 part's feeder; press again for its next feeder. <i>Camera to next placement</i>: over the part's placements on the
@@ -306,9 +315,13 @@ job table). Without the journal the placed placements are listed without order.<
 
 # ---------------------------------------------------------------------------------------
 HELP["feeder_assist"] = {
-    "title": "Feeder Assistant - which set-up feeder holds each part of a new board / panel",
+    "title": "Feeder Assistant - the job's feeders with the camera; feeders for a new board / panel",
     "html": """
-<p>Another project often names the same component differently (<i>C0402-0.1uF</i> vs <i>C_0402_1005Metric-100n</i>),
+<p><b>Tab Job feeders (camera)</b>: every feeder the open job uses, one line each, in slot order (front rail, then
+rear), with its part, references, how many are left and whether it is ready. <b>Next &gt;&gt;</b> moves the top camera
+to the next feeder's pick location (<i>&lt;&lt; Previous</i> back; double-click a line goes to that one).
+<i>Identify</i> blinks the selected feeder's LED. Parts that no feeder holds are listed last.</p>
+<p><b>Tab Assign feeders</b> (new board / panel): another project often names the same component differently (<i>C0402-0.1uF</i> vs <i>C_0402_1005Metric-100n</i>),
 so OpenPnP sees a new part without a feeder. The assistant reads every part name of the open job - <b>kind</b>
 (C, R, L, ferrite, LED, ...), <b>value</b> (100n = 100nF = 0.1uF, 4k7 = 4.7k, 0R1 = 0.1 ohm), <b>size</b> (0402, also from
 1005Metric), voltage / dielectric / tolerance, LED colour, part number - and compares it with the parts of the
@@ -329,8 +342,13 @@ part</i>: the feeder's part is replaced in the machine configuration (the job's 
 <p>Your choices are remembered (~/.openpnp2/lumen/partmatch.json): the same part name in a later project is proposed
 first ("confirmed by you before"). For parts where orientation matters and the package names differ, check the
 rotation in Orientation Setup.</p>
-""" + MOVES % "none. Identify blinks the feeder's LED only.",
+""" + MOVES % ("top camera only, at safe Z (Job feeders: Next / Previous / Camera to feeder / double-click; Look at "
+                "this feeder). Identify blinks the feeder's LED only."),
     "tips": {
+        "<< Previous": "Top camera to the previous feeder of the job (wraps round).",
+        "Camera to feeder": "Top camera to the selected feeder's pick location (double-click a line does the same).",
+        "Next >>": "Top camera to the next feeder of the job, in slot order (wraps round).",
+        "Refresh": "Re-read the open job and the feeders.",
         "only parts without an enabled feeder": "Hide parts that already have an enabled feeder holding exactly this part.",
         "Choose this feeder for the part": "Use the selected feeder (below) for the selected part (above). Not applied yet.",
         "Identify (blink LED)": "The selected feeder blinks its LED white 3 times (Photon IDENTIFY). No motion.",
@@ -358,6 +376,9 @@ rotation in Orientation Setup.</p>
         "Feeder": "Feeder name.", "Slot": "Photon slot address.", "Feeder part": "Part set up on the feeder.",
         "Why": "What matched.", "Warnings": "What to check before choosing (voltage, dielectric, size, keywords only).",
         "Enabled": "Whether the feeder is enabled.",
+        "#": "Position in the camera round.", "References (not placed first)": "Placements of the part, not placed first.",
+        "Left": "Placements of the part not placed yet.",
+        "Status": "ready, or why the feeder / part cannot be used yet (disabled, no location, no loaded nozzle tip, ...).",
     },
 }
 HELP["orientation"] = {
@@ -508,7 +529,9 @@ HELP["preflight"] = {
     "html": """
 <p>Runs the checks of ~/.openpnp2/lumen/preflight.json (edit to switch steps on/off or change severity):
 machine enabled, job open (and no board still at X 0 / Y 0, i.e. added again without its position), home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
-orientation confirmations, optional board Z. Result PASS / WARN / FAIL; it does not start or block the job.</p>
+orientation confirmations, scripting engines (OpenPnP's <i>Pool scripting engines?</i> off makes every Lumen job hook
+load a new Python engine: ~0.6 s per feed / pick / placement), optional board Z. Steps added in a newer version run
+also when your preflight.json is older. Result PASS / WARN / FAIL; it does not start or block the job.</p>
 """ + MOVES % "only <i>home</i> (if the step is on and the machine is not homed).",
     "tips": {
         "checklist:": "The checklist file in use.",

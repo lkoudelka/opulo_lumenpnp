@@ -25,19 +25,23 @@ import lumen.uihelp
 import lumen.jobinfo
 import lumen.tapevision
 import lumen.inspect
+import lumen.zoomview
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.tapevision)
 reload(lumen.inspect)
+reload(lumen.zoomview)
 from lumen import inspect as ins
-from lumen import jobinfo, oppnp
+from lumen import jobinfo, oppnp, zoomview
 from lumen.oppnp import JavaException
 
-from java.awt import BorderLayout, Desktop, Dimension, FlowLayout
+from java.awt import BorderLayout, Dimension, FlowLayout
+from java.awt.event import MouseAdapter
 from java.io import File
 from java.lang import Boolean, Double, String
+from javax.imageio import ImageIO
 from javax.swing import (BorderFactory, JButton, JCheckBox, JFrame, JLabel, JOptionPane, JPanel, JScrollPane, JTable,
                          WindowConstants)
 from javax.swing.table import AbstractTableModel
@@ -121,6 +125,13 @@ class Inspection(object):
         self.table.setAutoCreateRowSorter(True)
         for i, w in enumerate((50, 150, 70, 190, 160, 55, 420, 75, 70, 85, 120)):
             self.table.getColumnModel().getColumn(i).setPreferredWidth(w)
+        owner = self
+
+        class _Dbl(MouseAdapter):
+            def mouseClicked(self, e):
+                if e.getClickCount() == 2:
+                    owner.show_image()
+        self.table.addMouseListener(_Dbl())
         sp = JScrollPane(self.table)
         sp.setPreferredSize(Dimension(1460, 420))
         root.add(sp, BorderLayout.CENTER)
@@ -132,7 +143,9 @@ class Inspection(object):
         self.run_btn = JButton("Inspect selected", actionPerformed=lambda e: self.run())
         b.add(self.run_btn)
         b.add(JButton("Make golden from selected", actionPerformed=lambda e: self.make_golden()))
-        b.add(JButton("Open image", actionPerformed=lambda e: self.open_image()))
+        b.add(JButton("Show image", actionPerformed=lambda e: self.show_image()))
+        b.add(JButton("Camera to part", actionPerformed=lambda e: self.camera_to_part()))
+        b.add(JButton("Set as OK", actionPerformed=lambda e: self.set_ok()))
         b.add(JButton("Export CSV", actionPerformed=lambda e: self.export()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
@@ -150,7 +163,7 @@ class Inspection(object):
     def select(self, pred):
         for x in self.model.rows:
             x["sel"] = pred(x)
-        self.model.fireTableDataChanged()
+        self.changed()
 
     def selected_row(self):
         i = self.table.getSelectedRow()
@@ -206,16 +219,81 @@ class Inspection(object):
         self.log("golden for %s from %s: %s" % (x["package"], x["ref"], p))
         self.info.setText("golden sample saved for %s - inspect again to use it" % x["package"])
 
-    def open_image(self):
+    def selected_rows(self):
+        return [self.model.rows[self.table.convertRowIndexToModel(i)] for i in self.table.getSelectedRows()]
+
+    @staticmethod
+    def title(x):
+        return "%s  %s" % (x["ref"], x["part"])
+
+    def show_image(self):
+        """The saved picture with the result drawn in, zoomable; from there also Camera to part / Set as OK."""
         x = self.selected_row()
-        p = (x or {}).get("res", {}).get("image") if x else None
-        if not p:
+        res = (x or {}).get("res") or {}
+        if not res.get("_image") and not res.get("image"):
             JOptionPane.showMessageDialog(self.frame, "Select an inspected row.")
             return
-        try:
-            Desktop.getDesktop().open(File(p))
-        except (Exception, JavaException):
-            self.info.setText(p)
+        img = ins.annotate(res["_image"], res, self.title(x)) if res.get("_image") is not None else \
+            ImageIO.read(File(res["image"]))
+        text = ("<b>%s</b> (%s, board %s): <b>%s</b><br>Cyan dashed: where the part should be (body size, placement "
+                "rotation), cross = placement location; coloured box: the body found. Saved: %s"
+                % (x["ref"], x["part"], x["board"], res.get("verdict", ""), res.get("image", "-")))
+        zoomview.image_window("Inspection: %s %s" % (x["ref"], x["part"]), img, text, buttons=[
+            ("Camera to part", lambda w: self.camera_to_part(x), "Top camera over this placement (part top in focus)."),
+            ("Set as OK", lambda w: self.set_ok([x], w), "Accept this placement as OK (your decision, logged).")],
+            parent=self.frame)
+
+    def camera_to_part(self, x=None):
+        x = x or self.selected_row()
+        if x is None:
+            JOptionPane.showMessageDialog(self.frame, "Select a placement.")
+            return
+        if self.busy or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return
+        if not machine.isHomed():
+            JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.")
+            return
+        self.info.setText("camera to %s ..." % x["ref"])
+
+        def work():
+            try:
+                loc, z = oppnp.run_machine_task(machine, lambda: ins.go_to_placement(machine, x["bl"], x["pl"]))
+                text = "camera over %s (%s) X %.3f Y %.3f, focus Z %.2f" % (x["ref"], x["part"], loc.getX(), loc.getY(), z)
+            except (Exception, JavaException) as e:
+                text = "camera not moved to %s: %s" % (x["ref"], e)
+            self.log(text)
+            oppnp.on_ui(lambda: self.info.setText(text))
+        oppnp.in_background(work)
+
+    def set_ok(self, rows=None, parent=None):
+        rows = [x for x in (rows or self.selected_rows()) if x.get("res") and not x["res"].get("verdict", "").startswith("OK")]
+        if not rows:
+            JOptionPane.showMessageDialog(parent or self.frame, "Select inspected placement(s) that are not OK.")
+            return
+        if JOptionPane.showConfirmDialog(parent or self.frame, "Set as OK (you checked them):\n%s" % "\n".join(
+                "%s %s: %s" % (x["ref"], x["part"], x["res"]["verdict"]) for x in rows[:12]), "Set as OK",
+                JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+            return
+        for x in rows:
+            was = x["res"]["verdict"]
+            x["res"]["verdict"] = "OK (set by hand; was %s)" % was
+            x["res"]["manual_ok"] = True
+            try:
+                ins.save_annotated(x["res"], self.title(x))
+            except (Exception, JavaException) as e:
+                self.log("%s: image not updated: %s" % (x["ref"], e))
+            self.log("%s %s %s: set as OK by hand (was %s)" % (x["board"], x["ref"], x["part"], was))
+        self.changed()
+        self.info.setText("%d placement(s) set as OK by hand" % len(rows))
+
+    def changed(self):
+        """Table data changed, the clicked row(s) stay selected (a data change clears the selection)."""
+        keep = [self.table.convertRowIndexToModel(i) for i in self.table.getSelectedRows()]
+        self.model.fireTableDataChanged()
+        for m in keep:
+            if m < len(self.model.rows):
+                v = self.table.convertRowIndexToView(m)
+                self.table.addRowSelectionInterval(v, v)
 
     def export(self):
         rows = [x for x in self.all_rows if x.get("res")]

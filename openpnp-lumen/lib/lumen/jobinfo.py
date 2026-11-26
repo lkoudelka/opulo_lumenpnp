@@ -46,6 +46,46 @@ def part_height_mm(part):
         return 0.0
 
 
+def tip_issue(part, machine):
+    """None, or why no nozzle can take this part with the tips loaded now.  OpenPnP's job then plans an automatic
+    nozzle tip change; without a tip changer (Lumen) that move goes to the unset changer location and the job stops
+    with "Can't move y to -110.698mm, lower than soft limit" - no part, package or tip named (bench 2026-11-26:
+    C11, CAPC_2220, only N24 ticked)."""
+    pk = part.getPackage() if part is not None else None
+    if pk is None:
+        return None
+    nozzles = [n for n in machine.getDefaultHead().getNozzles()]
+    loaded = [(n.getName(), n.getNozzleTip()) for n in nozzles]
+    tips = list(pk.getCompatibleNozzleTips())
+    if any(t is not None and t in tips for _, t in loaded):
+        return None
+    now = ", ".join("%s has %s" % (n, t.getName() if t is not None else "no tip") for n, t in loaded)
+    if not tips:
+        return ("package %s has no compatible nozzle tip (%s): tick one in Packages > %s > Nozzle Tips"
+                % (pk.getId(), now, pk.getId()))
+    return ("package %s needs nozzle tip %s, not loaded (%s): the job would try an automatic tip change and stop with "
+            "\"Can't move ... soft limit\". Tick a loaded tip in Packages > %s > Nozzle Tips, or load %s by hand"
+            % (pk.getId(), " / ".join(t.getName() for t in tips), now, pk.getId(),
+               " / ".join(t.getName() for t in tips)))
+
+
+def tip_problems(job, machine):
+    """[(part id, references not placed yet, issue)] for the open job's parts no loaded nozzle tip suits."""
+    parts = {}
+    for bl, pl, placed in job_placements(job):
+        part = pl.getPart()
+        if placed or part is None:
+            continue
+        parts.setdefault(part.getId(), (part, []))[1].append(pl.getId())
+    out = []
+    for pid in sorted(parts):
+        part, refs = parts[pid]
+        issue = tip_issue(part, machine)
+        if issue:
+            out.append((pid, refs, issue))
+    return out
+
+
 def readiness(job, machine, lumen_profile=None):
     """One row per part used by the job:
     {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, issues: [str]}"""
@@ -78,6 +118,9 @@ def readiness(job, machine, lumen_profile=None):
         elif not r["enabled_feeders"]:
             issues.append("no usable feeder: " + "; ".join(
                 "%s: %s" % (f.getName(), unusable_reason(f)) for f in r["feeders"]))
+        tip = tip_issue(part, machine) if part is not None and r["remaining"] > 0 else None
+        if tip:
+            issues.append(tip)
         if part is not None and r["height"] <= 0:
             if not lumen_profile:
                 issues.append("part height unknown")
@@ -93,6 +136,26 @@ def readiness(job, machine, lumen_profile=None):
                 pass
         r["issues"] = issues
     return sorted(rows.values(), key=lambda r: (not r["issues"], r["part_id"]))
+
+
+def tour(job, machine):
+    """The job's feeders for a camera round, one row each in slot order (front rail, then rear):
+    {feeder, slot, part_id, refs [not placed first], remaining, status ('ready' or why not)}; parts that no feeder
+    holds come last with feeder None."""
+    rows, lost = [], []
+    for r in readiness(job, machine) if job is not None else []:
+        refs = [pl.getId() for _, pl, _ in part_placements(job, r["part_id"])]
+        fs = feeders_to_look_at(r)
+        if not fs:
+            lost.append({"feeder": None, "slot": None, "part_id": r["part_id"], "refs": refs,
+                         "remaining": r["remaining"], "status": "; ".join(r["issues"]) or "no feeder"})
+        for f in fs:
+            slot = f.getSlotAddress() if hasattr(f, "getSlotAddress") else None
+            status = ("disabled: %s" % unusable_reason(f)) if not f.isEnabled() else ("; ".join(r["issues"]) or "ready")
+            rows.append({"feeder": f, "slot": int(slot) if slot is not None else None, "part_id": r["part_id"],
+                         "refs": refs, "remaining": r["remaining"], "status": status})
+    rows.sort(key=lambda x: (x["slot"] is None, x["slot"] or 0, x["feeder"].getName()))
+    return rows + sorted(lost, key=lambda x: x["part_id"])
 
 
 def unusable_reason(f):

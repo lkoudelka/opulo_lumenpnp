@@ -168,6 +168,47 @@ check("feeder list: matching feeders on top, then a separator, then every other 
       sep and all(r.get("score") is not None for r in fr[:sep[0]]) and all(r.get("score") is None for r in fr[sep[0] + 1:])
       and len(fr) - 1 == nfeed, (sep, len(fr), nfeed))
 check("the 100n proposal warns that 16V is needed and the feeder part does not say", any("16V" in w for w in fr[0]["warn"]), fr[0]["warn"])
+S.out.println("job feeders: camera round")
+tr = fa.tmodel.rows
+withf = [r for r in tr if r["feeder"] is not None]
+slots = [r["slot"] for r in withf if r["slot"] is not None]
+check("tab 1 lists the job's feeders in slot order, parts without a feeder last",
+      withf and slots == sorted(slots) and all(r["feeder"] is None for r in tr[len(withf):])
+      and any(r["feeder"] is None for r in tr), (slots[:8], len(withf), len(tr)))
+from lumen import jobinfo as _ji
+check("every job part with a feeder is in the round", set(r["part_id"] for r in withf) == set(
+    r["part_id"] for r in _ji.readiness(job, machine, lumen_profile=False) if r["feeders"]))
+gone = []
+G_FA = fa.tour_camera.im_func.func_globals
+from org.openpnp.model import Location as _Loc, LengthUnit as _LU
+G_FA["feedercheck"].go_to = lambda m, f: (gone.append(f) or _Loc(_LU.Millimeters, 10.0, 20.0, 0.0, 0.0))
+G_FA["oppnp"].run_machine_task = lambda m, fn: fn()
+G_FA["oppnp"].in_background = lambda fn: fn()
+G_FA["oppnp"].on_ui = lambda fn: fn()
+G_FA["oppnp"].confirm_ready = lambda *a: True
+_h = machine.isHomed()
+machine.setHomed(True)
+fa.ttable.clearSelection()
+for _ in range(3):
+    fa.tour_step(1)
+check("Next x3: camera to the first three feeders in order",
+      gone == [r["feeder"] for r in withf[:3]] and fa.ttable.getSelectedRow() == tr.index(withf[2]), [f.getName() for f in gone])
+check("status line says where the camera is ('3 / N: camera at slot ...')", fa.tour_info.getText().startswith("3 / %d: camera at slot " % len(withf))
+      and "%s - %s" % (withf[2]["feeder"].getName(), withf[2]["part_id"]) in fa.tour_info.getText(),
+      fa.tour_info.getText())
+fa.tour_step(-1)
+check("Previous: back to the second feeder", gone[-1] == withf[1]["feeder"])
+fa.ttable.setRowSelectionInterval(tr.index(withf[-1]), tr.index(withf[-1]))
+fa.tour_step(1)
+check("Next after the last feeder wraps to the first", gone[-1] == withf[0]["feeder"])
+machine.setHomed(False)
+n = len(gone)
+fa.tour_step(1)
+check("not homed: camera not moved, said so", len(gone) == n and any("not homed" in str(m) for m in Pane.shown[-1:]), Pane.shown[-1:])
+machine.setHomed(_h)
+fa.tabs.setSelectedIndex(0)
+render(content, "feeder-assistant-job.png")
+fa.tabs.setSelectedIndex(1)
 render(content, "feeder-assistant.png")
 # nothing changed yet
 check("nothing changed before Apply (placements still use the new part, board file untouched)",
