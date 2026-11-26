@@ -88,7 +88,9 @@ def tip_problems(job, machine):
 
 def readiness(job, machine, lumen_profile=None):
     """One row per part used by the job:
-    {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, issues: [str]}"""
+    {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, issues: [str],
+     fixes: [gotofix.fix(): where each issue is fixed]}"""
+    from lumen.gotofix import fix
     from org.openpnp.machine.photon import PhotonFeeder
     if lumen_profile is None:
         from lumen.oppnp import active_profile
@@ -110,20 +112,27 @@ def readiness(job, machine, lumen_profile=None):
         part = r["part"]
         r["feeders"] = [f for f in feeders if part is not None and f.getPart() == part]
         r["enabled_feeders"] = [f for f in r["feeders"] if f.isEnabled()]
-        issues = []
+        issues, fixes = [], []
         if part is None:
             issues.append("placement has no part")
         elif not r["feeders"]:
             issues.append("no feeder has this part (Scripts > Lumen > Feeders, tab Assign feeders, finds set-up feeders by name)")
+            fixes.append(fix("assign", "no feeder has %s: assign one" % r["part_id"], r["part_id"]))
         elif not r["enabled_feeders"]:
             issues.append("no usable feeder: " + "; ".join(
                 "%s: %s" % (f.getName(), unusable_reason(f)) for f in r["feeders"]))
+            for f in r["feeders"]:
+                fixes.append(fix("feeder", "%s not usable: %s" % (f.getName(), unusable_reason(f)), f))
         tip = tip_issue(part, machine) if part is not None and r["remaining"] > 0 else None
         if tip:
             issues.append(tip)
+            if part.getPackage() is not None:
+                fixes.append(fix("package", "nozzle tips of package %s (tab Nozzle Tips): %s" % (r["package"], tip),
+                                 part.getPackage()))
         if part is not None and r["height"] <= 0:
             if not lumen_profile:
                 issues.append("part height unknown")
+                fixes.append(fix("part", "height of %s unknown (column Height)" % r["part_id"], part))
             else:
                 r["notes"].append("height unknown: probed on first pick (lumen)")
         if lumen_profile and part is not None and r["package"]:
@@ -132,9 +141,12 @@ def readiness(job, machine, lumen_profile=None):
                 if fp is None or fp.getBodyWidth() <= 0 or fp.getBodyHeight() <= 0:
                     issues.append("package %s has no body size: the bottom-vision size check (lumen) would "
                                   "reject it" % r["package"])
+                    fixes.append(fix("package", "body size of package %s (tab Footprint, or Preflight > Pick safety "
+                                     "learns it)" % r["package"], part.getPackage()))
             except Exception:
                 pass
         r["issues"] = issues
+        r["fixes"] = fixes
     return sorted(rows.values(), key=lambda r: (not r["issues"], r["part_id"]))
 
 

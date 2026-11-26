@@ -250,6 +250,16 @@ class FeederAssign(object):
         f = self.feeders.get(fid)
         return f.getName() if f is not None else fid
 
+    def select_part(self, part_id):
+        """Select the row of part_id (Job Readiness > Go to problem).  False if it is not listed."""
+        for i, x in enumerate(self.pmodel.rows):
+            if x["id"] == part_id:
+                v = self.ptable.convertRowIndexToView(i)
+                self.ptable.setRowSelectionInterval(v, v)
+                self.ptable.scrollRectToVisible(self.ptable.getCellRect(v, 0, True))
+                return True
+        return False
+
     def selected_part(self):
         i = self.ptable.getSelectedRow()
         return self.pmodel.rows[self.ptable.convertRowIndexToModel(i)] if i >= 0 else None

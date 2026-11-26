@@ -139,5 +139,21 @@ check("Apply: part-on high set, part-off Absolute with probing, dwell 0, after p
       and tip.isPartOffCheckAfterPlace() and tip.getVacuumLevelPartOffLow() == v["low"], done)
 check("every change logged with the old value", len(logged) == len(done) and all("(was" in x for x in logged), logged)
 check("CAPC_2220 (too few picks) untouched", cfg.getPackage("CAPC_2220").getFootprint().getBodyWidth() == 0.0)
+# free air: the valve gets actuate(boolean), not actuate(double) (bench 26 Nov: "VAC1.actuate(1.0)" sent nothing).
+# A real ReferenceActuator (value type Boolean) remembers which overload it got.
+from org.openpnp.spi.base.AbstractActuator import ActuatorCoordinationEnumType as _Coord
+valve = n1.getVacuumActuator()
+valve.setCoordinatedBeforeActuateEnum(_Coord.None)     # actuated outside a machine task here
+machine.setEnabled(True)
+valve.actuate(True)
+plain = valve.getLastActuationValue()
+ps._actuate(valve, True)
+on = valve.getLastActuationValue()
+ps._actuate(valve, False)
+off = valve.getLastActuationValue()
+check("free air: valve switched through actuate(boolean) (a plain Jython actuate(True) gives the double 1.0)",
+      str(valve.getValueType()) == "Boolean" and str(plain) == "1.0" and str(on).lower() == "true" and str(off).lower() == "false",
+      (str(plain), str(on), str(off)))
+
 _Sys.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 _Sys.exit(0 if all(results) else 1)

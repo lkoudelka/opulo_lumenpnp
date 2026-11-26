@@ -143,7 +143,7 @@ def st_lights(cfg, ctx):
     a = machine.getActuatorByName(cfg.get("actuator", "LED"))
     if a is None:
         return None, "actuator '%s' not found" % cfg.get("actuator", "LED")
-    a.actuate(True)
+    lumen.zprobe.actuate(a, True)                    # actuate(boolean) explicitly (Jython overload)
     return True, "'%s' on" % a.getName()
 
 

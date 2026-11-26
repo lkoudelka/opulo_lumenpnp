@@ -21,6 +21,7 @@ import lumen.uihelp
 import lumen.jobinfo
 import lumen.feedercheck
 import lumen.lastjob
+import lumen.gotofix
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
@@ -28,11 +29,12 @@ reload(lumen.uihelp)
 reload(lumen.jobinfo)
 reload(lumen.feedercheck)
 reload(lumen.lastjob)
-from lumen import feedercheck, jobinfo, lastjob, oppnp, photon
+reload(lumen.gotofix)
+from lumen import feedercheck, gotofix, jobinfo, lastjob, oppnp, photon
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
-from java.awt.event import MouseAdapter
+from java.awt.event import MouseAdapter, WindowAdapter
 from java.lang import String
 from javax.swing import (BorderFactory, JButton, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
                          JTable, WindowConstants)
@@ -106,6 +108,8 @@ class Readiness(object):
         sp.setPreferredSize(Dimension(1080, 380))
         root.add(sp, BorderLayout.CENTER)
         b = JPanel(FlowLayout(FlowLayout.RIGHT))
+        b.add(JButton("Go to problem", actionPerformed=lambda e: self.go_problem()))
+        b.add(JButton("Next problem >>", actionPerformed=lambda e: self.next_problem()))
         b.add(JButton("Camera to feeder", actionPerformed=lambda e: self.camera_feeder()))
         b.add(JButton("Camera to next placement", actionPerformed=lambda e: self.camera_placement()))
         b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh()))
@@ -120,14 +124,25 @@ class Readiness(object):
         f.setContentPane(lumen.uihelp.wrap(root, "job_readiness"))
         f.pack()
         f.setLocationRelativeTo(gui)
+        self.at = None                               # (part_id, fix index) of the last problem shown
         self.refresh()
+
+        class _Back(WindowAdapter):
+            def windowActivated(self, e):            # back from fixing something in OpenPnP: show the new state
+                rd.refresh()
+        f.addWindowListener(_Back())
         f.setVisible(True)
 
     def refresh(self):
         job = gui.getJobTab().getJob()
         rows = jobinfo.readiness(job, machine) if job else []
+        i = self.table.getSelectedRow()
+        keep = self.model.rows[self.table.convertRowIndexToModel(i)]["part_id"] if i >= 0 else None
         self.model.rows = rows
         self.model.fireTableDataChanged()
+        for k, x in enumerate(rows):
+            if x["part_id"] == keep:
+                self.select_row(k)
         blocking = len([x for x in rows if x["issues"]])
         name = job.getFile().getName() if job and job.getFile() else "(unsaved job)"
         zero = lastjob.unplaced_boards(job) if job else []
@@ -137,6 +152,64 @@ class Readiness(object):
             "<font color='green'>no blocking issue found</font>",
             "<br><font color='red'>Board %s at X 0 / Y 0: position not set (board added again?) - open the saved job "
             "(File &gt; Open Recent) or set the board location</font>" % ", ".join(zero) if zero else ""))
+
+    # -- go to where a problem is fixed (lumen.gotofix) ---------------------------------------------
+    def select_row(self, i):
+        v = self.table.convertRowIndexToView(i)
+        if v >= 0:
+            self.table.setRowSelectionInterval(v, v)
+            self.table.scrollRectToVisible(self.table.getCellRect(v, 0, True))
+
+    def go_fix(self, x, j):
+        f = x["fixes"][j]
+        try:
+            if f["kind"] == "assign":
+                text = gotofix.open_assign(scripting, f["target"])
+            else:
+                text = gotofix.show(gui, f)
+        except (Exception, JavaException) as e:
+            text = "could not open it: %s" % e
+        if len(x["fixes"]) > 1:
+            text += " (%d/%d for %s)" % (j + 1, len(x["fixes"]), x["part_id"])
+        self.at = (x["part_id"], j)
+        self.info.setText(text)
+        self.log(text)
+
+    def go_problem(self):
+        x = self.selected()
+        if x is None:
+            return
+        fx = x.get("fixes") or []
+        if not fx:
+            JOptionPane.showMessageDialog(self.frame, "%s: %s" % (x["part_id"], "; ".join(x["issues"]) if x["issues"] else
+                                          "no problem.") + ("" if not x["issues"] else
+                                          "\n(no OpenPnP tab to open for this one: fix it in the job / board)"))
+            return
+        j = 0
+        if len(fx) > 1:
+            texts = [f["text"] for f in fx]
+            c = JOptionPane.showInputDialog(self.frame, "%s has %d problems - which one?" % (x["part_id"], len(fx)),
+                                            "Go to problem", JOptionPane.QUESTION_MESSAGE, None, texts, texts[0])
+            if c is None:
+                return
+            j = texts.index(c)
+        self.go_fix(x, j)
+
+    def next_problem(self):
+        rows = self.model.rows
+        at = None
+        if self.at is not None:
+            for k, x in enumerate(rows):
+                if x["part_id"] == self.at[0]:
+                    at = (k, self.at[1])
+        if at is None and self.table.getSelectedRow() >= 0:
+            at = (self.table.convertRowIndexToModel(self.table.getSelectedRow()), -1)
+        p = gotofix.next_problem(rows, at)
+        if p is None:
+            self.info.setText("No problem left that an OpenPnP tab or the Feeders window fixes.")
+            return
+        self.select_row(p[0])
+        self.go_fix(rows[p[0]], p[1])
 
     # -- camera to the selected line -------------------------------------------------------------
     def selected(self):

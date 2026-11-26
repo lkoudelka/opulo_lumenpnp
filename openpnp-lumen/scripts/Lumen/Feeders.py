@@ -260,6 +260,7 @@ def verdict(res):
 class PartCheck(object):
     def __init__(self):
         from org.openpnp.machine.photon import PhotonFeeder
+        focus = globals().get("lumen_focus")                    # set by lumen.gotofix.open_assign (Job Readiness)
         self.settings = oppnp.Settings(scripting)
         self.log = oppnp.FileLog(scripting, "feeder-part-check")
         self.save_dir = os.path.join(oppnp.lumen_dir(scripting), "feeder-check")
@@ -388,6 +389,9 @@ class PartCheck(object):
         self.job_parts = None
         self.apply_filter()
         fr.setVisible(True)
+        if focus and focus.get("tab") == "assign":         # opened by Job Readiness > Go to problem
+            self.tabs.setSelectedIndex(2)
+            self.assign.select_part(focus.get("part"))
 
     # -- filter: only the open job's feeders ------------------------------------------------
     def shown(self, x):
