@@ -36,6 +36,37 @@ check("real holes kept (paper, embossed), ribbing circles dropped",
       len(tv.real_holes(own, dark)) == 3 and len(tv.real_holes(own, emb)) == 3 and tv.real_holes(own, rib) == [])
 check("no real holes -> 'no tape at the pick location?'", "no tape" in tv.eia_pocket(tv.real_holes(own, rib), size, U, 4)["error"])
 
+print("feeder nose fiducial (no OpenCV needed)")
+from lumen import feedercheck as fc  # noqa: E402
+c = (size[0] / 2.0, size[1] / 2.0)
+board = [(c[0] + mm(1.0), c[1], 46)]
+sides = [(c[0] + mm(1.0 - 2.0), c[1] + 3, 23), (c[0] + mm(1.0 + 2.0), c[1] - 2, 23)]
+hit = tv.fiducial_pattern(board, sides, size, U)
+check("centre mark with a side mark at 2 mm left and right -> found", hit and hit["x"] == board[0][0]
+      and all(abs(d - 2.0) < 0.01 for d in hit["side_mm"]), hit)
+check("lone bright dot (a sprocket hole with a reflection) -> None", tv.fiducial_pattern(board, [], size, U) is None)
+check("side marks only on one side -> None", tv.fiducial_pattern(board, [sides[0], (sides[0][0] - mm(0.1), c[1], 23)],
+                                                                 size, U) is None)
+check("unequal side distances (2.0 / 3.0 mm) -> None",
+      tv.fiducial_pattern(board, [sides[0], (c[0] + mm(4.0), c[1], 23)], size, U) is None)
+check("side marks along the tape (Y) do not count", tv.fiducial_pattern(
+    board, [(board[0][0], c[1] - mm(2.0), 23), (board[0][0], c[1] + mm(2.0), 23)], size, U) is None)
+two = tv.fiducial_pattern(board + [(c[0] - mm(6), c[1], 46)],
+                          sides + [(c[0] - mm(8), c[1], 23), (c[0] - mm(4), c[1], 23)], size, U)
+check("two full patterns -> the one nearest the photo centre", two and two["x"] == board[0][0], two)
+front = {"holes": [(300, 100, 70), (300, 470, 70)], "pocket_px": (620, 540)}     # holes left of the pocket
+rear = {"holes": [(1600, 100, 70), (1600, 470, 70)], "pocket_px": (1280, 540)}
+rails = [53.9, 58.5, 413.5, 407.0]
+check("nose direction from the holes: left of the pocket -> +Y (front rail), right -> -Y (rear)",
+      fc.nose_sign(55.0, front, rails) == 1 and fc.nose_sign(410.0, rear, rails) == -1)
+check("nose direction without holes: towards the middle of the slot locations",
+      fc.nose_sign(55.0, {}, rails) == 1 and fc.nose_sign(410.0, None, rails) == -1 and fc.nose_sign(410.0, {}, [400, 410]) == 1)
+n8 = fc.fiducial_nominal((296.9, 53.9), 1)
+n12 = fc.fiducial_nominal((296.9, 410.0), -1, 5.5)
+check("CAD position: 8 mm tape front rail +0.6 / +13.15, 12 mm rear rail +1.4 / -13.15 mm",
+      abs(n8[0] - 297.5) < 1e-9 and abs(n8[1] - 67.05) < 1e-9 and abs(n12[0] - 298.3) < 1e-9
+      and abs(n12[1] - 396.85) < 1e-9, (n8, n12))
+
 try:
     import cv2
     import numpy as np

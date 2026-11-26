@@ -41,5 +41,43 @@ for pat, pitch, F, want in (("look-slot4-raw*.png", 8, 5.5, (0.13, 1.84)), ("loo
     e, o = run(pat, pitch)
     check("%s: F %.1f, pocket %+.2f/%+.2f" % (pat[5:11], F, want[0], want[1]),
           o and e["F"] == F and abs(o[0] - want[0]) < 0.1 and abs(o[1] - want[1]) < 0.1, (e.get("error"), e.get("F"), o))
+S.out.println("feeder nose fiducial (synthetic photo: black mask, FR4 openings, copper dots, noise)")
+from java.awt import Color, Graphics2D as G2
+from java.awt.image import BufferedImage
+from java.util import Random
+
+
+def fid_photo(marks, upp=0.0114, size=(1929, 1093)):
+    """marks: [(x mm, y mm from the centre, +y up, copper diameter mm, mask opening mm)]."""
+    w, h = size
+    im = BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR)
+    g = im.createGraphics()                                    # (calls through Graphics2D: Java 17 modules)
+    G2.setColor(g, Color(25, 35, 30))
+    G2.fillRect(g, 0, 0, w, h)
+    rnd = Random(7)
+    for _ in range(4000):                                       # mask texture
+        v = 20 + rnd.nextInt(30)
+        G2.setColor(g, Color(v, v + 8, v + 4))
+        G2.fillRect(g, rnd.nextInt(w), rnd.nextInt(h), 3, 3)
+    for (x, y, d, o) in marks:
+        cx, cy = w / 2.0 + x / upp, h / 2.0 - y / upp
+        for dd, c in ((o, Color(95, 85, 60)), (d, Color(225, 205, 150))):
+            r = dd / 2.0 / upp
+            G2.setColor(g, c)
+            G2.fillOval(g, int(cx - r), int(cy - r), int(2 * r), int(2 * r))
+    G2.dispose(g)
+    return im
+
+
+U = 0.0114
+board = [(1.2, -0.7, 1.0, 2.0), (1.2 - 2.0, -0.7, 0.5, 1.5), (1.2 + 2.0, -0.7, 0.5, 1.5)]
+hit = tv.fiducial_java(fid_photo(board), U)
+fx, fy = ((hit["x"] - 1929 / 2.0) * U, -(hit["y"] - 1093 / 2.0) * U) if hit else (None, None)
+check("centre mark found with both side marks, within 0.05 mm", hit and hit["sides"] == 2
+      and abs(fx - 1.2) < 0.05 and abs(fy + 0.7) < 0.05, (hit, fx, fy))
+lone = tv.fiducial_java(fid_photo(board + [(0.2, 0.3, 1.0, 2.0)]), U)
+check("a lone bright dot nearer the centre loses to the mark with side marks", lone and lone["sides"] == 2
+      and abs((lone["x"] - 1929 / 2.0) * U - 1.2) < 0.05, lone)
+check("no marks (plain mask) -> None", tv.fiducial_java(fid_photo([]), U) is None)
 S.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 S.exit(0 if all(results) else 1)

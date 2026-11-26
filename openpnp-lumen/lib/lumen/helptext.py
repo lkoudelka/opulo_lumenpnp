@@ -105,7 +105,9 @@ the feeder's row. Stored in ~/.openpnp2/lumen/settings.json (defaults: feedwatch
         "Set offset by hand": "For the clicked, checked feeder (also when the pocket was NOT FOUND): its check photo opens; zoom "
                               "in with the mouse wheel and click the centre of the pick pocket. Apply moves the pick location "
                               "there (any distance, after a confirmation; read back). Pocket outside the photo: Camera "
-                              "here / Camera to slot location take a new photo there (camera moves only).",
+                              "here / Camera to slot location take a new photo there (camera moves only). Camera to "
+                              "feeder fiducial: camera to the round marks on the feeder nose (~13 mm towards the nose), "
+                              "the centre mark is found (green) and the pick location's distance from it is shown.",
         "only feeders of the open job": "Show only feeders whose part the open job places (both tabs). Hidden rows are "
                                         "unticked, so Check / Apply act only on the job's feeders.",
         "Identify (blink LED)": "The clicked feeder (either tab) blinks its LED white 3 times (Photon IDENTIFY command). No motion.",

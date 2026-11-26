@@ -51,6 +51,7 @@ def check_feeder(machine, feeder, save_dir=None):
         res["error"] = e["error"]
     else:
         res["method"] = "sprocket holes, %d mm tape" % {3.5: 8, 5.5: 12, 7.5: 16, 11.5: 24}[e["F"]]
+        res["F"] = e["F"]
         res["pocket_px"] = (e["x"], e["y"])
         res["pocket_dx"] = (e["x"] - w / 2.0) * u
         res["pocket_dy"] = -(e["y"] - h / 2.0) * upp.getY()
@@ -170,6 +171,71 @@ def slot_xy(feeder):
         return loc.getX(), loc.getY()
     except Exception:
         return None
+
+
+# The round marks on the feeder nose (tapevision.fiducial_pattern) relative to the pick location.  opulo_feeder CAD
+# (assembly-8 and assembly-12): fiducial board centre at X 78.1 / Y -7.6, indexing wheel at X 64.95 with its teeth
+# (the sprocket hole line) at Y -3.5.  So the centre mark is ~13 mm from the pick location towards the nose
+# (+- 2 mm: which pocket next to the wheel tooth is picked) and 4.1 mm from the hole line, the pocket F mm.
+FID_ALONG_MM = 13.15
+FID_FROM_HOLES_MM = 4.1
+FID_RECENTRE_MM = 0.15
+
+
+def nose_sign(pick_y, res=None, slot_ys=()):
+    """+1: the feeder nose points to +Y (front rail), -1: to -Y (rear rail).  From the check photo when it has the
+    sprocket holes (they are left of the pocket, seen along the nose), else the nose points to the middle of
+    the feeder slot locations (both rails), else +1."""
+    res = res or {}
+    holes, pocket = res.get("holes"), res.get("pocket_px")
+    if holes and pocket:
+        hx = sum(h[0] for h in holes) / float(len(holes))
+        return 1 if hx < pocket[0] else -1
+    ys = list(slot_ys)
+    if ys and max(ys) - min(ys) > 100.0:
+        return 1 if pick_y < (max(ys) + min(ys)) / 2.0 else -1
+    return 1
+
+
+def fiducial_nominal(pick_xy, sign, F=None):
+    """(x, y) mm where the feeder's centre fiducial should be (CAD), from the pick location."""
+    F = F or tapevision.POCKET_TO_HOLES_MM
+    return pick_xy[0] + sign * (FID_FROM_HOLES_MM - F), pick_xy[1] + sign * FID_ALONG_MM
+
+
+def all_slot_ys(machine):
+    out = []
+    for f in machine.getFeeders():
+        s = slot_xy(f) if hasattr(f, "getSlot") else None
+        if s is not None:
+            out.append(s[1])
+    return out
+
+
+def go_to_fiducial(machine, feeder, res=None):
+    """Top camera (safe Z) over the round marks on the feeder nose: to the CAD position from the pick location, find
+    the centre mark there, and centre the camera on it.  Camera only.  Call inside a machine task.
+    Returns {img, upp, at (photo centre mm), nominal (mm), sign, found: None or {x, y (mm), sides, side_mm}}."""
+    from org.openpnp.model import LengthUnit
+    mm = LengthUnit.Millimeters
+    if hasattr(feeder, "findSlotAddress") and feeder.getSlotAddress() is None:
+        feeder.findSlotAddress()
+    pick = feeder.getPickLocation().convertToUnits(mm)
+    sign = nose_sign(pick.getY(), res, all_slot_ys(machine))
+    nominal = fiducial_nominal((pick.getX(), pick.getY()), sign, (res or {}).get("F"))
+    at, found = nominal, None
+    for attempt in range(2):
+        img, upp = photo_at(machine, at[0], at[1], pick.getZ())
+        hit = tapevision.fiducial_java(img, upp[0])
+        if hit is None:
+            break                                        # (a mark found in the first photo stays found)
+        w, h = img.getWidth(), img.getHeight()
+        fx, fy = at[0] + (hit["x"] - w / 2.0) * upp[0], at[1] - (hit["y"] - h / 2.0) * upp[1]
+        found = {"x": fx, "y": fy, "sides": hit["sides"], "side_mm": hit["side_mm"]}
+        if attempt or math.hypot(fx - at[0], fy - at[1]) <= FID_RECENTRE_MM:
+            break
+        at = (fx, fy)                                    # second photo centred on the mark
+    return {"img": img, "upp": upp, "at": at, "nominal": nominal, "sign": sign, "found": found}
 
 
 def look(machine, feeder):

@@ -427,6 +427,29 @@ _SU0.invokeAndWait(_Flush())
 sx = g_p["feedercheck"].slot_xy(f0)
 check("hand offset: Camera to slot location photographs the feeder's slot location",
       sx is not None and len(shots) == 2 and abs(shots[1][0] - sx[0]) < 1e-6 and abs(shots[1][1] - sx[1]) < 1e-6, (sx, shots))
+_fc = g_p["feedercheck"]
+_hits = [{"x": 400 + 50, "y": 200 - 25, "r": 25, "sides": 2, "side_mm": [2.0, 2.0]},     # 1.0 mm right, 0.5 mm up
+         {"x": 400, "y": 200, "r": 25, "sides": 2, "side_mm": [2.0, 2.0]}]              # recentred: in the middle
+_orig_fid = _fc.tapevision.fiducial_java
+_fc.tapevision.fiducial_java = lambda img, upp: _hits.pop(0) if _hits else None
+pk = f0.getPickLocation()
+nom = _fc.fiducial_nominal((pk.getX(), pk.getY()), _fc.nose_sign(pk.getY(), row["res"], _fc.all_slot_ys(machine)))
+w, v = _hand_window(None)
+_press(w, "Camera to feeder fiducial")
+_SU0.invokeAndWait(_Flush())
+txt = " ".join(v.info.getText().split())                 # (an HTML pane: wrapped lines)
+check("hand offset: Camera to feeder fiducial goes to the CAD position (13 mm towards the nose), then centres on the mark",
+      len(shots) == 4 and abs(shots[2][0] - nom[0]) < 1e-6 and abs(shots[2][1] - nom[1]) < 1e-6
+      and abs(shots[3][0] - (nom[0] + 1.0)) < 1e-6 and abs(shots[3][1] - (nom[1] + 0.5)) < 1e-6
+      and abs(abs(nom[1] - pk.getY()) - 13.15) < 1e-6, (nom, shots[2:]))
+check("hand offset: the found fiducial and the pick location's distance from it are shown",
+      "Feeder fiducial" in txt and "%+.2f / %+.2f" % (pk.getX() - nom[0] - 1.0, pk.getY() - nom[1] - 0.5) in txt, txt)
+w, v = _hand_window(None)
+_press(w, "Camera to feeder fiducial")                     # nothing recognised
+_SU0.invokeAndWait(_Flush())
+check("hand offset: fiducial not recognised -> says so, photo at the CAD position (click + Camera here)",
+      "not recognised" in v.info.getText() and len(shots) == 5, v.info.getText())
+_fc.tapevision.fiducial_java = _orig_fid
 machine.setHomed(_homed)
 
 # Feeder Assistant: Look at this feeder (camera) - synthetic camera picture
