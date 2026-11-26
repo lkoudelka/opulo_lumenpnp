@@ -603,7 +603,8 @@ class PartCheck(object):
         # time.  Offsets count from the pick location NOW, so an Apply followed by another click on the same photo
         # does not move twice.
         p0 = res.get("pick") or pick_now()
-        state = {"click": None, "size": res["size"], "upp": res["upp"], "at": (p0[0], p0[1]), "z": p0[2], "busy": False}
+        state = {"click": None, "size": res["size"], "upp": res["upp"], "at": (p0[0], p0[1]), "z": p0[2], "busy": False,
+                 "fid": None}                        # the nose fiducial run: feedercheck.go_to_fiducial() minus the image
 
         def centre():
             """Photo centre - pick location now (mm)."""
@@ -622,9 +623,19 @@ class PartCheck(object):
             cx, cy = centre()
             return cx + dx, cy + dy
 
+        def to_px(ax, ay):
+            (w, h), (ux, uy) = state["size"], state["upp"]
+            return w / 2.0 + (ax - state["at"][0]) / ux, h / 2.0 - (ay - state["at"][1]) / uy
+
         def overlay(g, k):
             px, py = pick_px()
             zoomview.cross(g, px, py, 22, Color.RED, k, 2.5)                                 # pick location now
+            fid = state["fid"]
+            if fid and fid["found"]:
+                fx, fy = to_px(fid["found"]["x"], fid["found"]["y"])
+                r = 0.5 / state["upp"][0]
+                g.setColor(Color(0, 200, 0))
+                g.drawOval(int(fx - r), int(fy - r), int(2 * r), int(2 * r))
             if state["click"]:
                 zoomview.cross(g, state["click"][0], state["click"][1], 22, Color(30, 144, 255), k, 3.0)
 
@@ -638,6 +649,24 @@ class PartCheck(object):
                        x.get("status", ""), " (outside this photo when not shown)" if moved else " (photo centre)"))
             if moved:
                 base += "<br>Photo taken %+.2f / %+.2f mm from the pick location now." % c
+            fid = state["fid"]
+            if fid:
+                px, py, _ = pick_now()
+                if fid["found"]:
+                    m = fid["found"]
+                    base += ("<br><b>Feeder fiducial</b> (green): X %.3f / Y %.3f, %d side mark(s)%s. The pick location "
+                             "now is <b>%+.2f / %+.2f mm</b> from it (feeder CAD: %+.2f / %+.2f, +-2 mm along the tape)."
+                             % (m["x"], m["y"], m["sides"],
+                                " at %s mm" % " / ".join("%.2f" % d for d in m["side_mm"]) if m["side_mm"] else "",
+                                px - m["x"], py - m["y"], px - fid["nominal"][0], py - fid["nominal"][1]))
+                    far = ((m["x"] - fid["nominal"][0]) ** 2 + (m["y"] - fid["nominal"][1]) ** 2) ** 0.5
+                    if far > 3.0:
+                        base += ("<br><font color='#c00000'>%.1f mm from where the feeder CAD puts it: check that the "
+                                 "green circle is on this feeder's centre mark.</font>" % far)
+                else:
+                    base += ("<br><b>Feeder fiducial not recognised</b> in this photo (taken where the feeder CAD puts "
+                             "it, %+.2f / %+.2f mm from the pick location). Click on it and <i>Camera here</i> to look "
+                             "closer." % (fid["nominal"][0] - px, fid["nominal"][1] - py))
             o = offset()
             if o:
                 base += "<br><b>Offset to apply: %+.2f / %+.2f mm</b> (%.2f mm)." % (o[0], o[1], (o[0] ** 2 + o[1] ** 2) ** 0.5)
@@ -648,8 +677,9 @@ class PartCheck(object):
             view.info.setText(text())
             view.repaint()
 
-        def photo_to(w, ax, ay, what):
-            """New photo with the camera at (ax, ay) mm; clicks then count from there."""
+        def photo_to(w, ax, ay, what, job=None):
+            """New photo with the camera at (ax, ay) mm; clicks then count from there.  job: instead, a machine task
+            returning feedercheck.go_to_fiducial()'s dict (camera to the nose fiducial)."""
             if state["busy"]:
                 return
             if not oppnp.confirm_ready(machine, gui, w, "Cannot move the camera"):
@@ -662,14 +692,25 @@ class PartCheck(object):
 
             def work():
                 try:
-                    im, u = oppnp.run_machine_task(machine, lambda: feedercheck.photo_at(machine, ax, ay, state["z"]))
+                    if job is None:
+                        im, u = oppnp.run_machine_task(machine, lambda: feedercheck.photo_at(machine, ax, ay, state["z"]))
+                        r = {"img": im, "upp": u, "at": (ax, ay)}
+                    else:
+                        r = oppnp.run_machine_task(machine, job)
+                    im = r["img"]
+                    fid = dict((k, v) for k, v in r.items() if k != "img") if job is not None else None
 
                     def show():
-                        state.update({"size": (im.getWidth(), im.getHeight()), "upp": u, "at": (ax, ay), "click": None})
+                        state.update({"size": (im.getWidth(), im.getHeight()), "upp": r["upp"], "at": r["at"],
+                                      "click": None, "fid": fid})
                         view.set_image(im)
                         view.info.setText(text())
                     oppnp.on_ui(show)
-                    self.log("%s: hand offset photo at %s X %.3f Y %.3f" % (f.getName(), what, ax, ay))
+                    self.log("%s: hand offset photo at %s X %.3f Y %.3f%s" % (
+                        f.getName(), what, r["at"][0], r["at"][1], "" if fid is None else
+                        ": fiducial %s" % ("X %.3f Y %.3f, %d side mark(s)" % (fid["found"]["x"], fid["found"]["y"],
+                                                                             fid["found"]["sides"])
+                                           if fid["found"] else "not recognised")))
                 except (Exception, JavaException) as e:
                     oppnp.on_ui(lambda: view.info.setText("<html>camera not moved: %s</html>" % e))
                 finally:
@@ -690,6 +731,9 @@ class PartCheck(object):
                 JOptionPane.showMessageDialog(w, "%s has no slot location." % f.getName())
                 return
             photo_to(w, s[0], s[1], "the slot location")
+
+        def camera_fiducial(w):
+            photo_to(w, None, None, "the feeder fiducial", lambda: feedercheck.go_to_fiducial(machine, f, res))
 
         def apply_click(w):
             o = offset()
@@ -720,6 +764,9 @@ class PartCheck(object):
               "there (to find a pocket outside this photo)."),
              ("Camera to slot location", camera_slot, "Move the camera to the feeder's slot location (its rough position "
               "captured at set-up) and take a new photo."),
+             ("Camera to feeder fiducial", camera_fiducial, "Move the camera to the round marks on the feeder nose "
+              "(about 13 mm from the pick location towards the nose), find the centre mark and show how far the pick "
+              "location is from it."),
              ("Apply this offset", apply_click, "Move the pick location onto the point you clicked (any distance, "
               "after a confirmation).")],
             self.frame)

@@ -395,3 +395,90 @@ def holes_java(image, upp):
             rows.append([v & 0xFF for v in buf])
         return rows
     return _find_holes(circles_at, lambda x, y, r: _ring_sample(get, w, h, x, y, r), (w, h), upp)
+
+
+# ---- feeder ID fiducial board (the round marks on the feeder nose) ----
+# Photon feeder (opulo_feeder): a 12 x 4 mm board on the nose, flush with the tape, with a 1 mm centre fiducial and
+# two 0.5 mm fiducials 2 mm either side of it, across the feeder (their spacing is meant to encode the feeder width).
+FID_D_MM = 1.0
+FID_SIDE_D_MM = 0.5
+FID_SIDE_MM = 2.0
+
+
+def fid_bright(core, ring):
+    """Real fiducial: a bright copper dot in the solder mask opening (median core - median ring)."""
+    if not core or not ring:
+        return 0.0
+    return _pct(core, 50) - _pct(ring, 50)
+
+
+FID_BRIGHT_MIN = 25
+
+
+def fiducial_pattern(big, small, size, upp):
+    """The feeder fiducial among circle candidates (px): big [(x, y, r)] ~1 mm, small [(x, y, r)] ~0.5 mm.
+    The marks are in a row across the feeder (machine X on the Lumen rails): a big circle counts only with a side
+    mark on EACH side at the same distance (1.5 .. 4.5 mm, within 0.15 mm) - a lone bright dot is also what a
+    sprocket hole with a reflection looks like.  Nearest the image centre wins.  Returns {x, y, r, sides: 2,
+    side_mm [left, right]} (px; mm) or None."""
+    w, h = size
+    best, best_d = None, None
+    for (x, y, r) in big or []:
+        left, right = [], []
+        for (sx, sy, sr) in small or []:
+            d = abs(sx - x) * upp
+            if 1.5 <= d <= 4.5 and abs(sy - y) * upp <= 0.4:
+                (left if sx < x else right).append(d)
+        pairs = [(abs(dl - dr), dl, dr) for dl in left for dr in right if abs(dl - dr) <= 0.15]
+        if not pairs:
+            continue
+        _, dl, dr = min(pairs)
+        dc = math.hypot(x - w / 2.0, y - h / 2.0)
+        if best_d is None or dc < best_d:
+            best, best_d = {"x": x, "y": y, "r": r, "sides": 2, "side_mm": [dl, dr]}, dc
+    return best
+
+
+def fiducial_java(image, upp):
+    """The feeder fiducial in a BufferedImage (OpenPnP's OpenCV): fiducial_pattern() of bright round marks, or None."""
+    _ensure_opencv()
+    from org.opencv.core import Mat, Size
+    from org.opencv.imgproc import Imgproc
+    from org.openpnp.util import OpenCvUtils
+    import jarray
+    mat = OpenCvUtils.toMat(image)
+    gray = Mat()
+    Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+    g = Mat()
+    Imgproc.GaussianBlur(gray, g, Size(5, 5), 1.5)
+    w, h = gray.cols(), gray.rows()
+
+    def circles(d_mm, p2):
+        c = Mat()
+        r = d_mm / 2.0 / upp
+        Imgproc.HoughCircles(g, c, Imgproc.HOUGH_GRADIENT, 1.5, int(1.2 * d_mm / upp), 60, p2,
+                             int(0.75 * r), int(1.25 * r) + 1)
+        if c.empty():
+            return []
+        a = jarray.zeros(c.cols() * 3, "f")
+        c.get(0, 0, a)
+        # the copper dot itself (+-25 %), not the 2 mm mask opening or a part / pocket edge (bench photos of
+        # embossed tape: 0.63 .. 0.68 mm "dots" with side marks by chance)
+        return [(a[i], a[i + 1], a[i + 2]) for i in range(0, len(a), 3) if a[i + 2] <= 1.25 * r]
+
+    def get(x0, y0, x1, y1):
+        buf = jarray.zeros(x1 - x0, "b")
+        rows = []
+        for y in range(y0, y1):
+            gray.get(y, x0, buf)
+            rows.append([v & 0xFF for v in buf])
+        return rows
+
+    def bright(cs):
+        return [c for c in cs if fid_bright(*_ring_sample(get, w, h, c[0], c[1], c[2])) >= FID_BRIGHT_MIN]
+    for p2 in (30, 22, 16):
+        big = bright(circles(FID_D_MM, p2))
+        hit = fiducial_pattern(big, bright(circles(FID_SIDE_D_MM, p2)), (w, h), upp) if big else None
+        if hit:
+            return hit
+    return None
