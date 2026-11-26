@@ -46,6 +46,7 @@ from javax.swing import (BorderFactory, JButton, JCheckBox, JFrame, JLabel, JOpt
                          WindowConstants)
 from javax.swing.table import AbstractTableModel
 
+NOT_OK = ["not assembled (part missing)", "bad rotation", "shifted / offset", "wrong part", "other"]
 COLS = ["Check", "Board", "Ref", "Part", "Package", "Placed", "Result", "Offset mm", "Angle err", "Golden score", "Body size from"]
 
 
@@ -146,6 +147,7 @@ class Inspection(object):
         b.add(JButton("Show image", actionPerformed=lambda e: self.show_image()))
         b.add(JButton("Camera to part", actionPerformed=lambda e: self.camera_to_part()))
         b.add(JButton("Set as OK", actionPerformed=lambda e: self.set_ok()))
+        b.add(JButton("Set as NOT OK...", actionPerformed=lambda e: self.set_not_ok()))
         b.add(JButton("Export CSV", actionPerformed=lambda e: self.export()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
@@ -240,7 +242,9 @@ class Inspection(object):
                 % (x["ref"], x["part"], x["board"], res.get("verdict", ""), res.get("image", "-")))
         zoomview.image_window("Inspection: %s %s" % (x["ref"], x["part"]), img, text, buttons=[
             ("Camera to part", lambda w: self.camera_to_part(x), "Top camera over this placement (part top in focus)."),
-            ("Set as OK", lambda w: self.set_ok([x], w), "Accept this placement as OK (your decision, logged).")],
+            ("Set as OK", lambda w: self.set_ok([x], w), "Accept this placement as OK (your decision, logged)."),
+            ("Set as NOT OK...", lambda w: self.set_not_ok([x], w), "Not assembled / bad rotation / shifted / wrong "
+             "part (your decision, logged); not assembled can be placed again by the job.")],
             parent=self.frame)
 
     def camera_to_part(self, x=None):
@@ -285,6 +289,60 @@ class Inspection(object):
             self.log("%s %s %s: set as OK by hand (was %s)" % (x["board"], x["ref"], x["part"], was))
         self.changed()
         self.info.setText("%d placement(s) set as OK by hand" % len(rows))
+
+    def set_not_ok(self, rows=None, parent=None):
+        """Your verdict: why the placement is not OK.  'not assembled' can also be marked NOT placed in the job, so
+        the next job run places it again (the job file keeps it only when you save the job)."""
+        from javax.swing import BoxLayout, ButtonGroup, JRadioButton
+        rows = rows or self.selected_rows()
+        if not rows:
+            JOptionPane.showMessageDialog(parent or self.frame, "Select the placement(s) first (click the row).")
+            return
+        box = JPanel()
+        box.setLayout(BoxLayout(box, BoxLayout.Y_AXIS))
+        box.add(JLabel("<html>%s: why NOT OK?</html>" % ", ".join("%s (%s)" % (x["ref"], x["part"]) for x in rows[:8])))
+        group, radios = ButtonGroup(), []
+        for i, reason in enumerate(NOT_OK):
+            rb = JRadioButton(reason, i == 0)
+            group.add(rb)
+            radios.append(rb)
+            box.add(rb)
+        again = JCheckBox("mark NOT placed in the job: the next job run places it again", True)
+        box.add(again)
+        box.add(JLabel("<html><i>(for a placed part with bad rotation / shift / wrong part: remove the part from the board "
+                       "first, then mark it not placed)</i></html>"))
+        for rb in radios:
+            rb.addActionListener(lambda e: again.setSelected(radios[0].isSelected()))
+        if JOptionPane.showConfirmDialog(parent or self.frame, box, "Set as NOT OK", JOptionPane.OK_CANCEL_OPTION) \
+                != JOptionPane.OK_OPTION:
+            return
+        reason = [rb.getText() for rb in radios if rb.isSelected()][0]
+        job = gui.getJobTab().getJob()
+        for x in rows:
+            res = x.get("res") or {}
+            was = res.get("verdict", "not inspected")
+            res["verdict"] = "FAIL: %s (set by hand; was %s)" % (reason, was)
+            res["manual_ok"] = False
+            x["res"] = res
+            if res.get("_image") is not None:
+                try:
+                    ins.save_annotated(res, self.title(x))
+                except (Exception, JavaException) as e:
+                    self.log("%s: image not updated: %s" % (x["ref"], e))
+            if again.isSelected() and job is not None:
+                job.storePlacedStatus(x["bl"], x["pl"].getId(), False)
+                x["placed"] = False
+            self.log("%s %s %s: set as NOT OK by hand: %s%s (was %s)" % (
+                x["board"], x["ref"], x["part"], reason, "; marked NOT placed in the job" if again.isSelected() else "", was))
+        if again.isSelected():
+            try:
+                gui.getJobTab().getJobPlacementsPanel().refresh()
+                gui.getJobTab().getJobPlacementsPanel().updateActivePlacements()
+            except (Exception, JavaException):
+                pass
+        self.changed()
+        self.info.setText("%d placement(s) set as NOT OK (%s)%s" % (len(rows), reason, ": marked not placed, the next job "
+                          "run places them again" if again.isSelected() else ""))
 
     def changed(self):
         """Table data changed, the clicked row(s) stay selected (a data change clears the selection)."""

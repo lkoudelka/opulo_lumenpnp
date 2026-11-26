@@ -209,7 +209,12 @@ as taken). Limits: offset 0.15 mm, angle 8 deg, golden score OK &ge; 0.70, FAIL 
 <p>In the image: <b>cyan dashed</b> = where the part should be (body size, placement rotation), cross = placement location;
 the <b>box</b> = the body found (green OK, orange CHECK, red FAIL); the verdict on top. <i>Show image</i> (or double-click a
 row) opens it zoomable. <i>Camera to part</i> puts the top camera over the placement to look at it live. <i>Set as OK</i>:
-you checked it and accept it (logged, the image and the CSV say "set by hand").</p>
+you checked it and accept it (logged, the image and the CSV say "set by hand"). <i>Set as NOT OK</i>: the reason (not
+assembled, bad rotation, shifted, wrong part, other); a not assembled part can be marked <b>not placed</b> in the job so
+the next run places it again (for a placed part: remove it from the board first).</p>
+<p><b>Chip parts</b> (R / C / L 0201 .. 2512 by package name) are checked by their two bright <b>terminations</b>: a part
+is missing when the middle is as dark as the solder mask (bare pads); position and rotation come from the
+terminations. Other parts: body blob of the package body size, and the golden sample.</p>
 """ + MOVES % "the <b>top camera</b> only (safe Z): Inspect selected, Camera to part.",
     "tips": {
         "only placed": "Show only placements marked as placed in the job (off: all placements).",
@@ -220,6 +225,9 @@ you checked it and accept it (logged, the image and the CSV say "set by hand").<
         "Show image": "The saved image of the clicked row with the result drawn in, zoomable (double-click a row does the same).",
         "Camera to part": "Top camera over the clicked placement, part top in focus, to look at it in the camera view.",
         "Set as OK": "Accept the selected not-OK placement(s) as OK after your check (asks first; logged; image and CSV updated).",
+        "Set as NOT OK...": "Your verdict for the selected placement(s): not assembled / bad rotation / shifted / wrong part / "
+                            "other (logged; image and CSV updated). Optionally marks them NOT placed in the job, so the "
+                            "next job run places them again (default for 'not assembled').",
         "Export CSV": "Write the report (inspection.csv) into this run's folder.",
         "Close": "Close the window.",
     },
@@ -529,7 +537,8 @@ HELP["preflight"] = {
     "html": """
 <p>Runs the checks of ~/.openpnp2/lumen/preflight.json (edit to switch steps on/off or change severity):
 machine enabled, job open (and no board still at X 0 / Y 0, i.e. added again without its position), home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
-orientation confirmations, scripting engines (OpenPnP's <i>Pool scripting engines?</i> off makes every Lumen job hook
+orientation confirmations, pick checks (part-on / part-off vacuum checks of the loaded tips and the bottom-vision
+part size check: what would notice an empty pick or a part left on the nozzle), scripting engines (OpenPnP's <i>Pool scripting engines?</i> off makes every Lumen job hook
 load a new Python engine: ~0.6 s per feed / pick / placement), optional board Z. Steps added in a newer version run
 also when your preflight.json is older. Result PASS / WARN / FAIL; it does not start or block the job.</p>
 """ + MOVES % "only <i>home</i> (if the step is on and the machine is not homed).",

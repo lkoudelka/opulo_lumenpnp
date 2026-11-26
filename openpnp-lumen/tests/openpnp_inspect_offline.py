@@ -79,6 +79,25 @@ out = os.path.join(tempfile.mkdtemp(), "C7.png")
 res.update(_image=raw, image=out)
 ins.save_annotated(res, "C7  C_0402")
 check("save_annotated writes <ref>.png", os.path.isfile(out) and ImageIO.read(File(out)).getWidth() == w0)
+S.out.println("chip parts: terminations (real 0603 bench images, 2026-11-26)")
+C = os.path.expanduser(os.environ.get("CHIP_IMAGES", "~/claude/opulo/_testdata/inspection-0603"))
+if os.path.isfile(os.path.join(C, "truth.json")):
+    ct = json.load(open(os.path.join(C, "truth.json")))
+    got = {}
+    for ref, p in sorted(ct["parts"].items()):
+        cr = ins.chip_check(ImageIO.read(File(os.path.join(C, ref + ".png"))), ct["upp"], ct["body"][0], ct["body"][1], p["rot"])
+        got[ref] = (ins.verdict({"body": cr}), cr)
+    bad = [r for r, p in ct["parts"].items() if p["present"] != (not got[r][0].startswith("FAIL"))]
+    check("missing parts (bare pads) FAIL, placed ones not: %d images" % len(got), not bad, [(r, got[r][0]) for r in bad])
+    present = [r for r, p in ct["parts"].items() if p["present"]]
+    check("placed parts: OK, offset < 0.15 mm, angle < 4 deg (were CHECK with pads / half parts boxed)",
+          all(got[r][0] == "OK" and abs(got[r][1]["dx"]) < 0.15 and abs(got[r][1]["dy"]) < 0.15
+              and abs(got[r][1]["angle_err"]) < 4 for r in present), [(r, got[r][0]) for r in present])
+    check("missing: says 'bare pads'", all("bare pads" in got[r][0] for r, p in ct["parts"].items() if not p["present"]))
+else:
+    S.out.println("  (no %s: skipped)" % C)
+check("chip packages recognised by name", ins.is_chip("RES_0603") and ins.is_chip("CAPC_1206") and ins.is_chip("C_0402_1005Metric")
+      and ins.is_chip("R_0805_2012Metric") and not ins.is_chip("SOT-223_LM1117") and not ins.is_chip("DIODE_SOD-323"))
 S.out.println("golden sample method")
 root = tempfile.mkdtemp()
 ins.save_golden(root, "C_0402_1005Metric", img("ok"), upp, 0.0, L, W, "test ok.png")
