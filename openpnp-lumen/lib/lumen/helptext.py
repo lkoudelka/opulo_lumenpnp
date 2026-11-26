@@ -201,23 +201,32 @@ HELP["inspection"] = {
     "html": """
 <p>For the ticked placements the top camera looks at each part (camera only):</p>
 <ul>
-<li><b>Size method:</b> the part body (size from the package footprint, its pads or the KiCad name such as
-C_0402_1005Metric) near the location: found / offset / rotation.</li>
-<li><b>Golden sample:</b> after you mark one good part of a package as golden, later parts of that package are
-compared with it: match score, offset, and whether the part matches better <b>turned by 180 deg</b> (polarity).</li>
+<li><b>Chip parts</b> (R / C / L 0201 .. 2512 by package name, size from the EIA code: 0603 = 1.6 x 0.8 mm): the two
+bright <b>terminations</b> along the expected axis; a light ceramic body as bright as its tin is found as the
+<b>whole part</b> instead. <b>Missing</b> = bare pads: between them the solder mask.</li>
+<li><b>SMA / SMB / SMC diodes</b>: the two <b>lead tabs</b> with the black body between them.</li>
+<li><b>Other parts:</b> the dark body (package body size, else the name, e.g. SOD-323) near the location.</li>
+<li><b>Golden samples:</b> pictures of good parts of a package (<i>Make golden</i>, and every part you confirm:
+<i>Set as OK</i> / <i>Draw where the part is</i>, up to 6 per package): the best match counts - score, offset, and
+whether the part matches better <b>turned by 180 deg</b> (polarity).</li>
 </ul>
 <p>OK / CHECK / FAIL is an aid, not a sign-off - every image is kept
 (~/.openpnp2/lumen/inspection/&lt;job&gt;-&lt;time&gt;/: <i>&lt;ref&gt;.png</i> with the result drawn in, <i>&lt;ref&gt;-raw.png</i>
-as taken). Limits: offset 0.15 mm, angle 8 deg, golden score OK &ge; 0.70, FAIL &lt; 0.45.</p>
-<p>In the image: <b>cyan dashed</b> = where the part should be (body size, placement rotation), cross = placement location;
-the <b>box</b> = the body found (green OK, orange CHECK, red FAIL); the verdict on top. <i>Show image</i> (or double-click a
-row) opens it zoomable. <i>Camera to part</i> puts the top camera over the placement to look at it live. <i>Set as OK</i>:
-you checked it and accept it (logged, the image and the CSV say "set by hand"). <i>Set as NOT OK</i>: the reason (not
-assembled, bad rotation, shifted, wrong part, other); a not assembled part can be marked <b>not placed</b> in the job so
-the next run places it again (for a placed part: remove it from the board first).</p>
-<p><b>Chip parts</b> (R / C / L 0201 .. 2512 by package name) are checked by their two bright <b>terminations</b>: a part
-is missing when the middle is as dark as the solder mask (bare pads); position and rotation come from the
-terminations. Other parts: body blob of the package body size, and the golden sample.</p>
+as taken, <i>&lt;ref&gt;.json</i> what was used and found). Offset limits depend on the part: <b>along</b> it (towards one
+pad) 15 % of its length, <b>across</b> 30 % of its width, never below 0.15 mm (0603: 0.24 / 0.24 mm, 0805: 0.30 / 0.38);
+angle 8 deg (nearly square parts 15); golden score OK &ge; 0.70, FAIL &lt; 0.45.</p>
+<p><i>Show image</i> (or double-click a row): the picture, opened <b>zoomed on the part</b>; <b>&lt;&lt; Previous / Next
+&gt;&gt;</b> (or the arrow keys) go through the results in the table's order, <i>only not OK</i> skips the good ones. In
+the picture: <b>cyan dashed</b> = where the part should be, cross = placement location; the <b>box</b> = the part found
+(green OK, orange CHECK, red FAIL); <b>magenta</b> = drawn by you. <i>Camera to part</i> puts the top camera over the
+placement. <i>Set as OK</i>: you checked it and accept it (logged; parts of packages with golden samples are added as
+samples: learning). <i>Set as NOT OK</i>: the reason (not assembled, bad rotation, shifted, wrong part, other); a not
+assembled part can be marked <b>not placed</b> in the job so the next run places it again (for a placed part: remove
+it from the board first).</p>
+<p><b>Draw where the part is</b> - when the detection was wrong: drag a rectangle around the real part (its body with
+the terminations / leads). The verdict then comes from where you drew it (OK within the limits, else CHECK offset),
+the case is <b>saved for learning</b> (inspection/learning/: picture + your box, the test set the detection is tuned
+on) and, for a package with golden samples, the part becomes one more golden sample centred where it really is.</p>
 """ + MOVES % "the <b>top camera</b> only (safe Z): Inspect selected, Camera to part.",
     "tips": {
         "only placed": "Show only placements marked as placed in the job (off: all placements).",
@@ -225,7 +234,8 @@ terminations. Other parts: body blob of the package body size, and the golden sa
         "Select not OK": "Tick the placements whose last result is CHECK, FAIL or ERROR (to inspect them again).",
         "Inspect selected": "Camera over each ticked placement, analyse, save the image.",
         "Make golden from selected": "Use the clicked, inspected placement (a GOOD part) as the golden sample of its package.",
-        "Show image": "The saved image of the clicked row with the result drawn in, zoomable (double-click a row does the same).",
+        "Show image": "The saved image of the clicked row with the result drawn in, zoomed on the part; << Previous / Next >> "
+                      "through the results, Set as OK / NOT OK and Draw where the part is there (double-click a row does the same).",
         "Camera to part": "Top camera over the clicked placement, part top in focus, to look at it in the camera view.",
         "Set as OK": "Accept the selected not-OK placement(s) as OK after your check (asks first; logged; image and CSV updated).",
         "Set as NOT OK...": "Your verdict for the selected placement(s): not assembled / bad rotation / shifted / wrong part / "

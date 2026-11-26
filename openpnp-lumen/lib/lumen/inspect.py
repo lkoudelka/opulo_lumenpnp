@@ -19,8 +19,12 @@ import os
 import re
 import time
 
-LIMITS = {"offset_mm": 0.15, "angle_deg": 8.0, "score_ok": 0.70, "score_fail": 0.45, "search_mm": 0.6,
-          "size_tol": 0.45}
+# Offset limits relative to the body (offset_limits): across the part offset_frac x width (IPC-A-610 class 2 accepts a
+# side overhang of 50 % of the termination width), along it (towards one pad: the other end loses its pad) only
+# offset_along x length; never below offset_mm; and both together not more than the larger of the two.
+# 0603 (1.6 x 0.8): 0.24 along / 0.24 across; 0805: 0.30 / 0.38; 0402: 0.15 / 0.15.
+LIMITS = {"offset_mm": 0.15, "offset_frac": 0.3, "offset_along": 0.15, "angle_deg": 8.0, "angle_square_deg": 15.0,
+          "score_ok": 0.70, "score_fail": 0.45, "search_mm": 0.6, "size_tol": 0.45}
 
 
 # ---------------------------------------------------------------------------------------
@@ -28,7 +32,11 @@ LIMITS = {"offset_mm": 0.15, "angle_deg": 8.0, "score_ok": 0.70, "score_fail": 0
 # ---------------------------------------------------------------------------------------
 _METRIC = re.compile(r"(\d{2})(\d{2})Metric")
 _IMPERIAL = {"0201": (0.6, 0.3), "0402": (1.0, 0.5), "0603": (1.6, 0.8), "0805": (2.0, 1.25), "1206": (3.2, 1.6),
-             "1210": (3.2, 2.5), "2220": (5.7, 5.0)}
+             "1210": (3.2, 2.5), "1812": (4.5, 3.2), "2010": (5.0, 2.5), "2220": (5.7, 5.0), "2512": (6.3, 3.2)}
+
+
+# typical plastic body (without leads) of small packages, for the dark-body search when the footprint has no body size
+_BODY_BY_NAME = [("SOD-523", (1.2, 0.8)), ("SOD-323", (1.7, 1.25)), ("SOD-123", (2.7, 1.6))]
 
 
 def body_size(package):
@@ -57,6 +65,9 @@ def body_size(package):
     for code, (a, b) in _IMPERIAL.items():
         if re.search(r"(^|[_\-A-Za-z])%s($|[_\-])" % code, name):
             return a, b, "name %s" % code
+    for code, (a, b) in _BODY_BY_NAME:
+        if re.search(r"(^|[_\-])%s($|[_\-])" % re.escape(code), name, re.I):
+            return a, b, "name %s (typical body)" % code
     return None, None, "body size unknown (set the package footprint body)"
 
 
@@ -68,27 +79,38 @@ def _cv():
     _ensure_opencv()
 
 
-def _gray(image):
-    from org.opencv.core import Mat
+# Detection channels (bench 2026-11-26, blue solder mask, white LED ring; levels after the top camera colour change,
+# WB 6500 K, gamma 130):  blue channel: mask 99, dark body 69, tin ~250 -> dark bodies (find_body);  red channel:
+# mask 32, resistor body 40, ceramic body 130, tin 208 -> metal terminations / leads (chip_check).  Grey mixes both
+# (body vs mask 8 levels).  Golden samples keep the channel they were made with (older ones: grey).
+CHANNELS = {"blue": 0, "green": 1, "red": 2}
+
+
+def _gray(image, channel="gray"):
+    """One channel of a colour picture as the detection image: 'blue' / 'green' / 'red', or 'gray' (luminance)."""
+    from org.opencv.core import Core, Mat
     from org.opencv.imgproc import Imgproc
     from org.openpnp.util import OpenCvUtils
     m = OpenCvUtils.toMat(image)
+    if m.channels() == 1:
+        return m
     g = Mat()
-    if m.channels() > 1:
-        Imgproc.cvtColor(m, g, Imgproc.COLOR_BGR2GRAY)
+    if channel in CHANNELS:
+        Core.extractChannel(m, g, CHANNELS[channel])         # OpenCV order B, G, R
     else:
-        g = m
+        Imgproc.cvtColor(m, g, Imgproc.COLOR_BGR2GRAY)
     return g
 
 
-def find_body(image, upp, length, width, expect_rot):
+def find_body(image, upp, length, width, expect_rot, channel="blue", polarity=None):
     """Body blob near the image centre.  expect_rot: machine-frame rotation of the body's long axis
-    (deg, CCW).  Returns {found, dx, dy (mm, machine), angle_err (deg), size (l, w mm), score}."""
+    (deg, CCW).  channel: detection image (_gray); polarity 'bright' / 'dark' / None (both).
+    Returns {found, dx, dy (mm, machine), angle_err (deg), size (l, w mm), score}."""
     _cv()
     from java.util import ArrayList
     from org.opencv.core import Mat, MatOfPoint2f, Rect, Size
     from org.opencv.imgproc import Imgproc
-    g = _gray(image)
+    g = _gray(image, channel)
     h, w = g.rows(), g.cols()
     half = int((max(length, width) * 1.3 + 0.4) / upp)
     x0, y0 = max(0, w // 2 - half), max(0, h // 2 - half)
@@ -110,6 +132,8 @@ def find_body(image, upp, length, width, expect_rot):
         masks.append((b, name))
     k = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(max(3, int(0.08 / upp)) | 1, max(3, int(0.08 / upp)) | 1))
     for b, name in masks:
+        if polarity is not None and polarity not in name:
+            continue
         Imgproc.morphologyEx(b, b, Imgproc.MORPH_CLOSE, k)
         cs = ArrayList()
         Imgproc.findContours(b, cs, Mat(), Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
@@ -149,11 +173,38 @@ def find_body(image, upp, length, width, expect_rot):
 # Chip parts have a clearer signature: two bright terminations L - t apart; when the part is missing, the middle
 # is solder mask (as dark as the mask around) and the pads are matte grey.
 _CHIP = re.compile(r"^(R|C|L|D|RES|CAP|CAPC|IND|FB|LED)_?(0201|0402|0603|0805|1206|1210|1812|2010|2220|2512)(_|$)", re.I)
-CHIP_LIMITS = {"mid_missing": 15, "term_frac": 0.2}
+CHIP_LIMITS = {"mid_missing": 15, "term_frac": 0.2, "max_dev_deg": 12.0, "light_ratio": 0.62, "body_darker": 12}
 
 
 def is_chip(package_id):
     return bool(_CHIP.search(str(package_id or "")))
+
+
+# DO-214 diodes (SMA / SMB / SMC): two bent lead tabs at the ends of a black body - checked like a chip part with the
+# leads as the ends: (lead-to-lead span, lead width) mm, typical datasheet values.  A body size learned by the bottom
+# camera (Pick safety) is exactly that (SMA 4.73 x 1.49) and is used when set.
+_LEADED = re.compile(r"(DO-?214A[ABC]|(^|[_\-])SM[ABC]($|[_\-]))", re.I)
+_LEADED_SIZE = {"A": (5.0, 1.4), "C": (5.0, 1.4), "B": (5.3, 2.0), "AA": (5.3, 2.0), "AB": (7.9, 3.0), "SMC": (7.9, 3.0)}
+
+
+def leaded_size(package_id):
+    """(span, lead width) of a DO-214 / SMA / SMB / SMC package, or (None, None) when not one."""
+    name = str(package_id or "")
+    m = _LEADED.search(name)
+    if not m:
+        return None, None
+    t = m.group(0).upper()
+    if "SMB" in t or t.endswith("AA"):
+        return _LEADED_SIZE["B"]
+    if "SMC" in t or t.endswith("AB"):
+        return _LEADED_SIZE["SMC"]
+    return _LEADED_SIZE["A"]
+
+
+def chip_size(package_id):
+    """(length, width) mm of a chip package from its EIA size code (RES_0603 -> 1.6 x 0.8), or (None, None)."""
+    m = _CHIP.search(str(package_id or ""))
+    return _IMPERIAL.get(m.group(2), (None, None)) if m else (None, None)
 
 
 def _percentile_hist(mat, q):
@@ -187,7 +238,23 @@ def _sample(g, cx, cy, a, upp, u, v, hu, hv, n=9):
     return out
 
 
-def chip_check(image, upp, length, width, expect_rot):
+def light_ratio(image, upp, length, width, expect_rot):
+    """(middle - mask) / (bright - mask) in the RED channel around the expected part: ~1 = the body is as bright as the
+    ends (light ceramic caps), < 0.6 = dark body (resistors; their white marking lifts it to ~0.55).  Red: the blue
+    mask is dark there under either camera colour (bench 26 Nov test set: resistors <= 0.56, light caps 0.7..0.98)."""
+    r = _gray(image, "red")
+    cx, cy, a = r.cols() / 2.0, r.rows() / 2.0, math.radians(expect_rot)
+    box = sorted(_sample(r, cx, cy, a, upp, 0.0, 0.0, 0.45 * length, 0.4 * width, 7))
+    mid = sorted(_sample(r, cx, cy, a, upp, 0.0, 0.0, 0.12 * length, 0.25 * width, 7))
+    ring = sorted(_sample(r, cx, cy, a, upp, 0.0, 0.5 * width + 0.5, 0.4 * length, 0.08, 7) +
+                  _sample(r, cx, cy, a, upp, 0.0, -(0.5 * width + 0.5), 0.4 * length, 0.08, 7))
+    if not box or not mid or not ring:
+        return 0.0
+    mask, top, m = ring[len(ring) // 4], box[int(len(box) * 0.95)], mid[len(mid) // 2]
+    return (m - mask) / max(1.0, top - mask)
+
+
+def chip_check(image, upp, length, width, expect_rot, leads=False):
     """Chip part at the image centre (the placement location).  Returns like find_body {found, dx, dy (mm, machine),
     angle_err, size, method, box_px} plus missing (True: the middle is solder mask = bare pads) and the levels."""
     _cv()
@@ -207,10 +274,20 @@ def chip_check(image, upp, length, width, expect_rot):
     t = 0.2 * length                                    # termination length along the part
     mid = _sample(g, cx, cy, a, upp, 0.0, 0.0, 0.2 * length, 0.3 * width)
     mid_level = sorted(mid)[len(mid) // 2] if mid else 0.0
-    levels = {"mask": mask, "middle": mid_level, "bright": top}
+    levels = {"mask": mask, "middle": mid_level, "bright": top,
+              "light_ratio": light_ratio(image, upp, length, width, expect_rot)}
+    if not leads and levels["light_ratio"] >= CHIP_LIMITS["light_ratio"]:
+        # light ceramic body (bench 26 Nov, neutral white balance: 0805 / 0603 caps as bright as their tin): the ends
+        # do not stand out (an end pairs with exposed solder on a pad) -> the whole part as one bright L x W blob
+        r = _whole_part(image, upp, length, width, expect_rot, levels)
+        if r is not None:
+            return r
     # terminations: bright blobs about t x width, L - t apart, around the centre
     b = Mat()
     Imgproc.threshold(roi, b, mask + 0.55 * (top - mask), 255, Imgproc.THRESH_BINARY)
+    # only a corridor along the expected axis counts: a neighbour's end or a via ring merged with an end moved its
+    # centre off the part (bench R7 next to a via)
+    _keep_corridor(b, int(cx) - x0, int(cy) - y0, a, 0.8 * length / upp, (0.8 * width + 0.25) / upp)
     cs = ArrayList()
     Imgproc.findContours(b, cs, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
     area0 = t * width / upp / upp
@@ -232,23 +309,81 @@ def chip_check(image, upp, length, width, expect_rot):
             off = math.hypot(mx - cx, my - cy) * upp
             if off > 0.5 * length:
                 continue
-            score = abs(d - want) / want + off / length
+            ang = math.degrees(math.atan2(-(by - ay), bx - ax))
+            dev = abs(((ang - expect_rot) + 90.0) % 180.0 - 90.0)
+            if dev > CHIP_LIMITS["max_dev_deg"]:         # an end paired with the marking text / a pad (bench R7)
+                continue
+            score = abs(d - want) / want + off / length + dev / 30.0
             if best is None or score < best[0]:
-                best = (score, mx, my, math.degrees(math.atan2(-(by - ay), bx - ax)), d)
+                best = (score, mx, my, ang, d)
+    if best is None and leads:
+        return {"found": False, "missing": False, "levels": levels, "method": "leads",
+                "why": "leads not found (part shifted, tilted or missing?)"}
     if best is None:
         missing = mid_level - mask < CHIP_LIMITS["mid_missing"]
+        if not missing:
+            # no pair of ends: light ceramic body (bench 26 Nov, neutral white balance: 0805 / 0603 caps whose body is
+            # as bright as the tin; 2220 grey body, ends barely brighter) -> the whole part as one bright L x W blob
+            # on the dark mask, along the expected axis
+            r = _whole_part(image, upp, length, width, expect_rot, levels)
+            if r is not None:
+                return r
         return {"found": False, "missing": missing, "levels": levels, "method": "terminations",
                 "why": ("part missing: bare pads (the middle is as dark as the solder mask)" if missing else
                         "terminations not found (part shifted, tilted or not a chip part?)")}
     _, mx, my, ang, d = best
+    # bare pads look like two ends at the right distance: between them lies solder mask, not a body
+    if leads:
+        # black epoxy body: in grey as dark as the blue mask, in the blue channel clearly darker (bench D3: 69 vs 99)
+        bl = _gray(image, "blue")
+        between = _sample(bl, mx, my, math.radians(ang), upp, 0.0, 0.0, 0.15 * length, 0.25 * width)
+        ring = sorted(_sample(bl, mx, my, math.radians(ang), upp, 0.0, 0.5 * width + 0.9, 0.35 * length, 0.08, 7) +
+                      _sample(bl, mx, my, math.radians(ang), upp, 0.0, -(0.5 * width + 0.9), 0.35 * length, 0.08, 7))
+        between = sorted(between)[len(between) // 2] if between else 255.0
+        mask_b = ring[len(ring) // 4] if ring else 0.0
+        levels.update(between_blue=between, mask_blue=mask_b)
+        if mask_b - between < CHIP_LIMITS["body_darker"]:
+            return {"found": False, "missing": False, "levels": levels, "method": "leads",
+                    "why": "leads / pads found, but no dark body between them: part missing?"}
+    else:
+        between = _sample(g, mx, my, math.radians(ang), upp, 0.0, 0.0, 0.15 * length, 0.25 * width)
+        between = sorted(between)[len(between) // 2] if between else 255.0
+        levels["between"] = between
+        if between - mask < CHIP_LIMITS["mid_missing"]:
+            return {"found": False, "missing": True, "levels": levels, "method": "terminations",
+                    "why": "part missing: bare pads (between them the solder mask)"}
     err = ((ang - expect_rot) + 90.0) % 180.0 - 90.0
     hl, hw = (d + t) / 2.0 / upp, width / 2.0 / upp
     ar = math.radians(ang)
     box = [(mx + x * math.cos(ar) - y * math.sin(ar), my - (x * math.sin(ar) + y * math.cos(ar)))
            for x, y in ((-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw))]
     return {"found": True, "missing": False, "dx": (mx - cx) * upp, "dy": -(my - cy) * upp, "angle_err": err,
-            "size": (d + t, width), "size_err": abs(d - want) / want, "method": "terminations", "box_px": box,
+            "size": (d + t, width), "size_err": abs(d - want) / want, "method": "leads" if leads else "terminations",
+            "box_px": box,
             "levels": levels}
+
+
+def _keep_corridor(binary, cx, cy, a, half_len, half_wid):
+    """Zero a binary Mat outside the rectangle centred (cx, cy) px, axis a (rad, machine CCW; image y down)."""
+    import jarray
+    from org.opencv.core import Core, Mat, MatOfPoint, Point, Scalar
+    from org.opencv.imgproc import Imgproc
+    pts = [Point(cx + x * math.cos(a) - y * math.sin(a), cy - (x * math.sin(a) + y * math.cos(a)))
+           for x, y in ((-half_len, -half_wid), (half_len, -half_wid), (half_len, half_wid), (-half_len, half_wid))]
+    m = Mat.zeros(binary.rows(), binary.cols(), binary.type())
+    Imgproc.fillConvexPoly(m, MatOfPoint(jarray.array(pts, Point)), Scalar(255.0))
+    Core.bitwise_and(binary, m, binary)
+
+
+def _whole_part(image, upp, length, width, expect_rot, levels):
+    """The chip part as one bright L x W blob along the expected axis (grey), or None."""
+    r = find_body(image, upp, length, width, expect_rot, channel="gray", polarity="bright")
+    if r.get("found") and abs(r["angle_err"]) <= CHIP_LIMITS["max_dev_deg"]:
+        r["method"] = "whole part (light body)"
+        r["missing"] = False
+        r["levels"] = levels
+        return r
+    return None
 
 
 def rotate(mat, deg):
@@ -261,66 +396,86 @@ def rotate(mat, deg):
     return out
 
 
-def match_golden(image, upp, golden, expect_rot):
-    """golden: {"mat": gray Mat, "rot": machine rotation it was taken at, "upp"}.  Returns
-    {score, score180, dx, dy, polarity_suspect}."""
-    _cv()
-    from org.opencv.core import Core, Mat, Rect, Size
+def _template(sample, upp):
+    """A golden sample's grey Mat at the camera's mm/px."""
+    from org.opencv.core import Mat, Size
     from org.opencv.imgproc import Imgproc
-    g = _gray(image)
-    t = golden["mat"]
-    if abs(golden.get("upp", upp) - upp) / upp > 0.03:
+    t = sample["mat"]
+    if abs(sample.get("upp", upp) - upp) / upp > 0.03:
         t2 = Mat()
-        f = golden["upp"] / upp
+        f = sample["upp"] / upp
         Imgproc.resize(t, t2, Size(int(t.cols() * f), int(t.rows() * f)))
         t = t2
+    return t
+
+
+def _samples(golden):
+    return golden.get("samples") or [golden]
+
+
+def match_golden(image, upp, golden, expect_rot):
+    """golden: load_golden() (one or more samples {"mat": gray Mat, "rot": machine rotation it was taken at, "upp"}).
+    Every sample is matched, the best counts.  Returns {score, score180, dx, dy, polarity_suspect, samples, sample}."""
+    _cv()
+    from org.opencv.core import Core, Mat, Rect
+    from org.opencv.imgproc import Imgproc
+    g = _gray(image)
     h, w = g.rows(), g.cols()
     sm = int(LIMITS["search_mm"] / upp)
-    W = t.cols() + 2 * sm
-    H = t.rows() + 2 * sm
-    x0, y0 = w // 2 - W // 2, h // 2 - H // 2
-    roi = g.submat(Rect(x0, y0, W, H))
+    out = None
+    for k, smp in enumerate(_samples(golden)):
+        t = _template(smp, upp)
+        W, H = min(w, t.cols() + 2 * sm), min(h, t.rows() + 2 * sm)
+        x0, y0 = w // 2 - W // 2, h // 2 - H // 2
+        roi = g.submat(Rect(x0, y0, W, H))
 
-    def best(deg):
-        tr = rotate(t, deg)
-        res = Mat()
-        Imgproc.matchTemplate(roi, tr, res, Imgproc.TM_CCOEFF_NORMED)
-        mm = Core.minMaxLoc(res)
-        return mm.maxVal, mm.maxLoc
-    # image rotation is clockwise-positive in OpenCV's y-down frame = machine CCW positive
-    d = expect_rot - golden["rot"]
-    s, loc = best(d)
-    s180, _ = best(d + 180.0)
-    cxm = x0 + loc.x + t.cols() / 2.0
-    cym = y0 + loc.y + t.rows() / 2.0
-    return {"score": s, "score180": s180, "dx": (cxm - w / 2.0) * upp, "dy": -(cym - h / 2.0) * upp,
-            "polarity_suspect": s180 > s + 0.10}
+        def best(deg):
+            res = Mat()
+            Imgproc.matchTemplate(roi, rotate(t, deg), res, Imgproc.TM_CCOEFF_NORMED)
+            mm = Core.minMaxLoc(res)
+            return mm.maxVal, mm.maxLoc
+        # image rotation is clockwise-positive in OpenCV's y-down frame = machine CCW positive
+        d = expect_rot - smp["rot"]
+        s, loc = best(d)
+        if out is not None and s <= out["score"]:
+            continue
+        s180, _ = best(d + 180.0)
+        cxm = x0 + loc.x + t.cols() / 2.0
+        cym = y0 + loc.y + t.rows() / 2.0
+        out = {"score": s, "score180": s180, "dx": (cxm - w / 2.0) * upp, "dy": -(cym - h / 2.0) * upp,
+               "polarity_suspect": s180 > s + 0.10, "sample": smp.get("source") or "sample %d" % (k + 1)}
+    out["samples"] = len(_samples(golden))
+    return out
 
 
 def match_golden_turns(image, upp, golden, expect_rot, turns=(0.0, 90.0, 180.0, -90.0)):
     """Golden-sample score with the part turned by each of `turns` (deg CCW, machine frame) against the
-    expected rotation: {turn: score}.  The best turn says how the placed part really sits (test
-    placement, lumen.testplace.propose_turn)."""
+    expected rotation: {turn: score} (best sample per turn).  The best turn says how the placed part really sits
+    (test placement, lumen.testplace.propose_turn)."""
     _cv()
-    from org.opencv.core import Core, Mat, Rect, Size
+    from org.opencv.core import Core, Mat, Rect
     from org.opencv.imgproc import Imgproc
     g = _gray(image)
-    t = golden["mat"]
-    if abs(golden.get("upp", upp) - upp) / upp > 0.03:
-        t2 = Mat()
-        f = golden["upp"] / upp
-        Imgproc.resize(t, t2, Size(int(t.cols() * f), int(t.rows() * f)))
-        t = t2
     h, w = g.rows(), g.cols()
     sm = int(LIMITS["search_mm"] / upp)
-    W, H = min(w, t.cols() + 2 * sm), min(h, t.rows() + 2 * sm)
-    roi = g.submat(Rect(w // 2 - W // 2, h // 2 - H // 2, W, H))
     out = {}
-    for turn in turns:
-        res = Mat()
-        Imgproc.matchTemplate(roi, rotate(t, expect_rot - golden["rot"] + turn), res, Imgproc.TM_CCOEFF_NORMED)
-        out[float(turn)] = Core.minMaxLoc(res).maxVal
+    for smp in _samples(golden):
+        t = _template(smp, upp)
+        W, H = min(w, t.cols() + 2 * sm), min(h, t.rows() + 2 * sm)
+        roi = g.submat(Rect(w // 2 - W // 2, h // 2 - H // 2, W, H))
+        for turn in turns:
+            res = Mat()
+            Imgproc.matchTemplate(roi, rotate(t, expect_rot - smp["rot"] + turn), res, Imgproc.TM_CCOEFF_NORMED)
+            out[float(turn)] = max(out.get(float(turn), -1.0), Core.minMaxLoc(res).maxVal)
     return out
+
+
+def offset_limits(length, width):
+    """(along, across) allowed offsets (mm) for a body length x width (None: the fixed minimum).  Along the part
+    (towards one pad) offset_along x length, across offset_frac x width, never below offset_mm."""
+    lo = LIMITS["offset_mm"]
+    return (max(lo, LIMITS["offset_along"] * length) if length else lo,
+            max(lo, LIMITS["offset_frac"] * width) if width else lo)
 
 
 def verdict(res):
@@ -345,17 +500,35 @@ def verdict(res):
             notes.append(b.get("why") or "part missing")
         elif not b.get("found"):
             if not g or g["score"] < LIMITS["score_ok"]:
-                if b.get("method") == "terminations":
+                if b.get("method") in ("terminations", "leads"):
                     notes.append(b.get("why"))
+                elif g and g["score"] >= LIMITS["score_fail"]:
+                    # a leaded IC's configured size includes its leads: the dark body alone does not match it;
+                    # the golden sample still sees the part (bench U3 VIPer, 0.64)
+                    notes.append("part body not found (golden sample %.2f): check by eye" % g["score"])
                 else:
                     fail = True
                     notes.append("part body not found: missing?")
         else:
             off = math.hypot(b["dx"], b["dy"])
-            if off > LIMITS["offset_mm"]:
-                notes.append("offset %.2f mm (%+.2f / %+.2f)" % (off, b["dx"], b["dy"]))
-            if abs(b["angle_err"]) > LIMITS["angle_deg"]:
-                notes.append("rotated %+.0f deg" % b["angle_err"])
+            size = res.get("expect_size") or b.get("size") or (None, None)
+            a = math.radians(res.get("axis_rot") or 0.0)
+            along = b["dx"] * math.cos(a) + b["dy"] * math.sin(a)
+            across = -b["dx"] * math.sin(a) + b["dy"] * math.cos(a)
+            lim_l, lim_w = offset_limits(size[0], size[1])
+            golden_here = g and g["score"] >= LIMITS["score_ok"] and math.hypot(g["dx"], g["dy"]) <= max(lim_l, lim_w)
+            if golden_here and off > 2 * max(lim_l, lim_w):
+                # the golden sample sees the part where it belongs; the body search took something else (bench U3:
+                # a dark blob 3.35 mm away) -> the body result is not used
+                b["ignored"] = "the golden sample matches %.2f at the location" % g["score"]
+            else:
+                if abs(along) > lim_l or abs(across) > lim_w or off > max(lim_l, lim_w):
+                    notes.append("offset %.2f mm (%+.2f / %+.2f; along the part %.2f of %.2f allowed, across %.2f of "
+                                 "%.2f)" % (off, b["dx"], b["dy"], abs(along), lim_l, abs(across), lim_w))
+                # nearly square parts: the axis from two wide ends is uncertain (bench C11 2220: +-9 deg)
+                lim_a = LIMITS["angle_deg"] if not size[0] or size[0] > 1.3 * size[1] else LIMITS["angle_square_deg"]
+                if abs(b["angle_err"]) > lim_a:
+                    notes.append("rotated %+.0f deg" % b["angle_err"])
     if not notes:
         return "OK"
     return ("FAIL: " if fail else "CHECK: ") + "; ".join(notes)
@@ -372,11 +545,15 @@ def golden_path(root, package_id):
     return os.path.join(root, "golden", _safe(package_id))
 
 
-def load_golden(root, package_id):
+MAX_GOLDEN = 6      # samples per package: <package>.png (the first, "Make golden") + <package>.2.png ... .6.png
+
+
+def _sample_paths(root, package_id):
     p = golden_path(root, package_id)
-    if not os.path.exists(p + ".png"):
-        return None
-    _cv()
+    return [p] + ["%s.%d" % (p, i) for i in range(2, MAX_GOLDEN + 1)]
+
+
+def _read_sample(p):
     from org.opencv.imgcodecs import Imgcodecs
     f = open(p + ".json")
     try:
@@ -384,36 +561,99 @@ def load_golden(root, package_id):
     finally:
         f.close()
     meta["mat"] = Imgcodecs.imread(p + ".png", Imgcodecs.IMREAD_GRAYSCALE)
+    meta["path"] = p + ".png"
     return meta
 
 
-def save_golden(root, package_id, image, upp, rot, length, width, source):
-    """Crop around the image centre (part + margin) as the golden sample of the package."""
+def load_golden(root, package_id):
+    """The golden samples of a package, or None: the first sample's fields (mat, rot, upp, ...) plus "samples" [all].
+    Extra samples come from parts the operator confirmed (add_golden_sample): the best match counts, so the
+    package's look under the current light and boards is learned."""
+    paths = [p for p in _sample_paths(root, package_id) if os.path.exists(p + ".png") and os.path.exists(p + ".json")]
+    if not paths:
+        return None
     _cv()
+    samples = [_read_sample(p) for p in paths]
+    out = dict(samples[0])
+    out["samples"] = samples
+    return out
+
+
+def _write_sample(p, image, upp, rot, length, width, source, centre_px=None):
     from org.opencv.core import Rect
     from org.opencv.imgcodecs import Imgcodecs
     g = _gray(image)
     half = int((max(length, width) * 0.75 + 0.25) / upp)
     h, w = g.rows(), g.cols()
-    crop = g.submat(Rect(w // 2 - half, h // 2 - half, 2 * half, 2 * half)).clone()
-    p = golden_path(root, package_id)
+    cx, cy = (int(round(centre_px[0])), int(round(centre_px[1]))) if centre_px else (w // 2, h // 2)
+    cx, cy = min(max(cx, half), w - half), min(max(cy, half), h - half)
+    crop = g.submat(Rect(cx - half, cy - half, 2 * half, 2 * half)).clone()
     d = os.path.dirname(p)
     if not os.path.isdir(d):
         os.makedirs(d)
     Imgcodecs.imwrite(p + ".png", crop)
     f = open(p + ".json", "w")                            # Jython: close explicitly (no refcount flush)
     try:
-        json.dump({"rot": rot, "upp": upp, "size": [length, width], "source": source,
+        json.dump({"rot": rot, "upp": upp, "size": [length, width], "source": source, "channel": "gray",
                    "t": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
     finally:
         f.close()
     return p + ".png"
 
 
+def save_golden(root, package_id, image, upp, rot, length, width, source, centre_px=None):
+    """Crop around the image centre (or centre_px: where the part really is) as THE golden sample of the package:
+    the first sample; the learned extra samples are removed (a fresh start)."""
+    _cv()
+    paths = _sample_paths(root, package_id)
+    for p in paths[1:]:
+        for ext in (".png", ".json"):
+            if os.path.exists(p + ext):
+                os.remove(p + ext)
+    return _write_sample(paths[0], image, upp, rot, length, width, source, centre_px)
+
+
+def add_golden_sample(root, package_id, image, upp, rot, length, width, source, centre_px=None):
+    """One more golden sample (a placement the operator confirmed).  The first sample is kept; when all MAX_GOLDEN
+    are used, the oldest extra one is replaced.  Returns the file written."""
+    _cv()
+    paths = _sample_paths(root, package_id)
+    if not os.path.exists(paths[0] + ".png"):
+        return _write_sample(paths[0], image, upp, rot, length, width, source, centre_px)
+    free = [p for p in paths[1:] if not os.path.exists(p + ".png")]
+    if free:
+        target = free[0]
+    else:
+        target = min(paths[1:], key=lambda p: _read_meta_t(p))
+    return _write_sample(target, image, upp, rot, length, width, source, centre_px)
+
+
+def _read_meta_t(p):
+    try:
+        f = open(p + ".json")
+        try:
+            return json.load(f).get("t", "")
+        finally:
+            f.close()
+    except (IOError, ValueError):
+        return ""
+
+
 def analyse(image, upp, package_id, length, width, rot, root):
     """Both methods on one image -> result dict incl. verdict."""
     res = {}
-    if length and is_chip(package_id):
+    if is_chip(package_id):
+        # chip parts: the EIA size code is the top-view outline (a body size learned by the bottom camera, e.g.
+        # 0603 1.45 x 0.80, is shorter: bench R6 ends 1.5 mm apart rejected)
+        nl, nw = chip_size(package_id)
+        if nl:
+            length, width = nl, nw
+    span, lead_w = leaded_size(package_id)
+    if span and not is_chip(package_id):
+        if not length or length < 0.8 * span:           # a learned lead span (Pick safety) is kept when set
+            length, width = span, lead_w
+        res["body"] = chip_check(image, upp, length, width, rot, leads=True)
+    elif length and is_chip(package_id):
         res["body"] = chip_check(image, upp, length, width, rot)
     elif length:
         res["body"] = find_body(image, upp, length, width, rot)
@@ -422,6 +662,8 @@ def analyse(image, upp, package_id, length, width, rot, root):
         res["golden"] = match_golden(image, upp, g, rot)
     if not length and g is None:
         res["error"] = "no body size and no golden sample for %s" % package_id
+    res["expect_size"] = [length, width] if length else None
+    res["axis_rot"] = rot
     res["verdict"] = verdict(res)
     return res
 
@@ -472,10 +714,15 @@ def annotate(image, res, title):
     g.drawLine(int(cx - r), int(cy), int(cx + r), int(cy))
     g.drawLine(int(cx), int(cy - r), int(cx), int(cy + r))
     box = (res.get("body") or {}).get("box_px")
-    if box:
+    if box and not res.get("hand_box"):
         g.setColor(col)
         g.setStroke(BasicStroke(1.5 * lw))
         g.draw(poly(box))
+    hb = res.get("hand_box")
+    if hb:                                               # where the operator drew the part (magenta)
+        g.setColor(Color(255, 0, 255))
+        g.setStroke(BasicStroke(1.5 * lw))
+        g.draw(poly([(hb[0], hb[1]), (hb[2], hb[1]), (hb[2], hb[3]), (hb[0], hb[3])]))
     fs = max(16, int(w / 55))
     g.setFont(Font("SansSerif", Font.BOLD, fs))
     text = "%s   %s" % (title, v)
@@ -494,6 +741,77 @@ def save_annotated(res, title):
     from java.io import File
     if res.get("_image") is not None and res.get("image"):
         ImageIO.write(annotate(res["_image"], res, title), "png", File(res["image"]))
+
+
+# ---------------------------------------------------------------------------------------
+# what the inspection used, and the operator's corrections (learning)
+# ---------------------------------------------------------------------------------------
+def meta_of(res, package_id, part_id, truth=None):
+    """The inputs and result of one inspection as plain data (the test set format of tests/inspection_dataset.py)."""
+    size = res.get("expect_size") or [None, None]
+    b = res.get("body") or {}
+    g = res.get("golden") or {}
+    m = {"package": package_id, "part": part_id, "length": size[0], "width": size[1], "axis_rot": res.get("axis_rot"),
+         "upp": res.get("upp"), "size_source": res.get("size_source"), "verdict": res.get("verdict"),
+         "detected": {"found": b.get("found"), "method": b.get("method"), "dx": b.get("dx"), "dy": b.get("dy"),
+                      "angle_err": b.get("angle_err"), "box_px": b.get("box_px"), "golden": g.get("score")}}
+    if res.get("location"):
+        m["location"] = res["location"]
+    if res.get("hand_box"):
+        m["hand_box"], m["hand_dx"], m["hand_dy"] = res["hand_box"], res.get("hand_dx"), res.get("hand_dy")
+    if truth:
+        m["truth"] = truth
+    return m
+
+
+def _write_json(path, data):
+    f = open(path, "w")                                   # Jython: close explicitly
+    try:
+        json.dump(data, f, indent=1, sort_keys=True)
+    finally:
+        f.close()
+
+
+def hand_position(res, x0, y0, x1, y1):
+    """The part where the operator drew it (image px rectangle) -> (dx, dy) mm from the placement location,
+    verdict text, truth ('ok' / 'shifted').  The rotation is taken as expected (the rectangle has none)."""
+    w, h = res["_image"].getWidth(), res["_image"].getHeight()
+    upp = res["upp"]
+    dx, dy = ((x0 + x1) / 2.0 - w / 2.0) * upp, -((y0 + y1) / 2.0 - h / 2.0) * upp
+    dx, dy = round(dx, 3) + 0.0, round(dy, 3) + 0.0                # no "-0.00"
+    size = res.get("expect_size") or [abs(x1 - x0) * upp, abs(y1 - y0) * upp]
+    a = math.radians(res.get("axis_rot") or 0.0)
+    along, across = dx * math.cos(a) + dy * math.sin(a), -dx * math.sin(a) + dy * math.cos(a)
+    lim_l, lim_w = offset_limits(size[0], size[1])
+    off = math.hypot(dx, dy)
+    within = abs(along) <= lim_l and abs(across) <= lim_w and off <= max(lim_l, lim_w)
+    text = "part drawn by hand at %+.2f / %+.2f mm (%.2f mm; along %.2f of %.2f, across %.2f of %.2f allowed)" % (
+        dx, dy, off, abs(along), lim_l, abs(across), lim_w)
+    return dx, dy, ("OK (%s)" % text) if within else ("CHECK: offset, %s" % text), "ok" if within else "shifted"
+
+
+def save_learning(root, run_name, ref, res, package_id, part_id, truth):
+    """The picture and the operator's correction into <root>/learning/<run>/ (<ref>-raw.png + meta.json, the test
+    set format: tests/run_inspection_eval.sh evaluates it).  Returns the directory."""
+    from javax.imageio import ImageIO
+    from java.io import File
+    d = os.path.join(root, "learning", _safe(run_name))
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    ImageIO.write(res["_image"], "png", File(os.path.join(d, _safe(ref) + "-raw.png")))
+    mp = os.path.join(d, "meta.json")
+    data = {"source": run_name, "parts": {}}
+    if os.path.isfile(mp):
+        f = open(mp)
+        try:
+            data = json.load(f)
+        finally:
+            f.close()
+    m = meta_of(res, package_id, part_id, truth)
+    m["t"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    data["parts"][ref] = m
+    _write_json(mp, data)
+    return d
 
 
 # ---------------------------------------------------------------------------------------
@@ -532,8 +850,9 @@ def inspect_placement(machine, board_location, placement, out_dir, root):
     if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
         rot += 90.0
     res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root)
-    res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot,
-               expect_size=[length, width] if length else None)
+    res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot)
+    if is_chip(str(pkg.getId()) if pkg else "") and chip_size(str(pkg.getId()))[0]:
+        res["size_source"] = "EIA size code (chip)"           # analyse() used it, expect_size says so
     res["_image"] = img
     if out_dir:
         if not os.path.isdir(out_dir):
@@ -542,4 +861,6 @@ def inspect_placement(machine, board_location, placement, out_dir, root):
         ImageIO.write(img, "png", File(base + "-raw.png"))
         res["raw_image"], res["image"] = base + "-raw.png", base + ".png"
         save_annotated(res, "%s  %s" % (placement.getId(), part.getId() if part else "-"))
+        _write_json(base + ".json", meta_of(res, str(pkg.getId()) if pkg else None,
+                                            str(part.getId()) if part else None))
     return res

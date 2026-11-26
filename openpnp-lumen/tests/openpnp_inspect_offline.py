@@ -49,11 +49,9 @@ r = ins.find_body(img("rot5"), upp, L, W, 0.0)
 check("rot5: angle error +5 (CCW) within 2", r["found"] and abs(r["angle_err"] - 5) < 2, fmt(r))
 r = ins.find_body(img("missing"), upp, L, W, 0.0)
 check("missing: not found", not r["found"], r)
+_v = [ins.verdict({"body": ins.find_body(img(n), upp, L, W, 0.0)}) for n in ("ok", "offset", "rot90", "missing")]
 check("verdicts: ok OK / offset CHECK / rot90 CHECK / missing FAIL",
-      ins.verdict({"body": ins.find_body(img("ok"), upp, L, W, 0.0)}) == "OK"
-      and ins.verdict({"body": ins.find_body(img("offset"), upp, L, W, 0.0)}).startswith("CHECK")
-      and "rotated" in ins.verdict({"body": ins.find_body(img("rot90"), upp, L, W, 0.0)})
-      and ins.verdict({"body": ins.find_body(img("missing"), upp, L, W, 0.0)}).startswith("FAIL"))
+      _v[0] == "OK" and _v[1].startswith("CHECK") and "rotated" in _v[2] and _v[3].startswith("FAIL"), _v)
 
 S.out.println("result drawn into the saved image")
 r = ins.find_body(img("offset"), upp, L, W, 0.0)

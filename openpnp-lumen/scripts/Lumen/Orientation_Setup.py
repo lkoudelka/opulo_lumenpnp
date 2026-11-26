@@ -613,10 +613,11 @@ class TestDialog(object):
                 msgs.append("Rotation NOT set: %s" % e)
         if self.golden.isSelected() and ev.get("ok") and self.res is not None and self.res.get("length"):
             pkg = r["part"].getPackage()
-            p = lumen.inspect.save_golden(os.path.join(oppnp.lumen_dir(scripting), "inspection"), str(pkg.getId()),
-                                          self.res["_image"], self.res["upp"], self.res["axis_rot"], self.res["length"],
-                                          self.res["width"], "test placement %s" % self.state["ref"])
-            msgs.append("Golden sample saved: %s" % p)
+            p = lumen.inspect.add_golden_sample(os.path.join(oppnp.lumen_dir(scripting), "inspection"),
+                                                str(pkg.getId()), self.res["_image"], self.res["upp"],
+                                                self.res["axis_rot"], self.res["length"], self.res["width"],
+                                                "test placement %s" % self.state["ref"])
+            msgs.append("Golden sample added: %s" % p)
         self.store_result(ev, applied, out, err)
         self.owner.log("test placement %s / %s: %s; %s" % (r["part_id"], self.state["ref"], ev["text"], "; ".join(msgs)))
         JOptionPane.showMessageDialog(self.frame, "%s\n\n%s" % (ev["text"], "\n".join(msgs)))
