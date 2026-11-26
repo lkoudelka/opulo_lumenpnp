@@ -55,6 +55,10 @@ OpenPnP **scripts** (Jython 2.7, the interpreter bundled with OpenPnP 2.6), in t
 - At start-up, if the job is empty and the last job file (*File > Open Recent*) exists, a question offers to reopen it. *Yes* opens it as *File > Open Job* would.
 - Preflight (*job open*) fails, and Job Readiness shows a red line, when an enabled board is still at X 0 / Y 0.
 
+**Scripting engines pooled while a job runs** (`Events/Startup.py`, `lib/lumen/enginepool.py`):
+- Without pooling OpenPnP loads a new Python engine for every event script: ~0.6 s per Lumen hook call, ~1.9 s per part with the three job hooks (bench 2026-11-26). With pooling, changed Lumen code reaches the hooks only after a restart.
+- So, when *Pool scripting engines?* is off in the configuration, a 1 s timer follows the job: **Running** (also Pausing / Stopping) -> pooled; **Paused / Stopped** -> not pooled and the pool emptied, the next run loads the current code. With the setting on, OpenPnP pools permanently and the automatic mode stays out of the way. A configuration saved during a job (pooling on) is put back at the next start. Preflight *script_engines* says which mode is active.
+
 **Job errors in words** (`Events/Job.Error.py`, `lib/lumen/joberror.py`):
 - OpenPnP reports only the low-level failure. Example (bench 2026-11-26): "Can't move y to -110.698mm, lower than soft limit". The cause was part C11 (package CAPC_2220), whose only compatible nozzle tip N24 was not loaded. The job tried an automatic tip change, and the changer location is not set on a Lumen.
 - On a job error, a second message names the parts and references, the package, the tips needed and the fix (tick a loaded tip in *Packages > Nozzle Tips*, or load the tip by hand). It is shown once per distinct text, because OpenPnP repeats the error on every retry. Other soft-limit errors point to the board position and the pick location.
@@ -297,6 +301,7 @@ lib/lumen/zoomview.py   zoom in / out / pan for pictures (wheel, drag, right cli
 lib/lumen/homeguard.py  safe homing: guard in front of OpenPnP's Home (events/Startup.py)
 lib/lumen/lastjob.py    start-up offer to reopen the last job; boards still at X 0 / Y 0
 lib/lumen/picksafety.py, picksafetyui.py   Preflight > Pick safety: learned body sizes / vacuum limits
+lib/lumen/enginepool.py scripting engines pooled only while a job runs (events/Startup.py)
 lib/lumen/joberror.py   job errors in words (events/Job.Error.py): e.g. no loaded nozzle tip for a part
 lib/lumen/machinecal.py Machine Calibration: Opulo V4.1 steps via OpenPnP's Issues & Solutions, safety rules
 lib/lumen/pictures/     pictures for the manual calibration steps (tools/make_cal_pictures.py)

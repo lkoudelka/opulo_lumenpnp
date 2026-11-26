@@ -232,13 +232,16 @@ HOOKS = ("Feeder.BeforeFeed.py", "Nozzle.AfterPick.py", "Job.Placement.Complete.
 def st_script_engines(cfg, ctx):
     events = os.path.join(str(scripting.getScriptsDirectory()), "Events")
     hooks = [h for h in HOOKS if os.path.exists(os.path.join(events, h))]
+    from lumen import enginepool
+    if enginepool.is_auto():
+        return True, "pooled automatically while a job runs (fresh code when stopped / paused)"
     pooled = machine.isPoolScriptingEngines() if hasattr(machine, "isPoolScriptingEngines") else True
     if pooled or not hooks:
         return True, "scripting engines pooled" if pooled else "no Lumen job hooks installed"
     per = len([h for h in hooks if h != "Job.Error.py"])
     return False, ("'Pool scripting engines?' is off: each of %d job hook(s) (%s) loads a new Python engine, "
-                   "~0.6 s per feed / pick / placement (~%.1f s per part). Machine Setup > machine > General > Pool "
-                   "scripting engines? (then restart OpenPnP)" % (per, ", ".join(h[:-3] for h in hooks if h != "Job.Error.py"),
+                   "~0.6 s per feed / pick / placement (~%.1f s per part), and the automatic pooling (events/Startup.py, "
+                   "install.sh) is not running: restart OpenPnP after install.sh" % (per, ", ".join(h[:-3] for h in hooks if h != "Job.Error.py"),
                                                                   0.6 * per))
 
 

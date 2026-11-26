@@ -619,8 +619,8 @@ HELP["preflight"] = {
 <p>Runs the checks of ~/.openpnp2/lumen/preflight.json (edit to switch steps on/off or change severity):
 machine enabled, job open (and no board still at X 0 / Y 0, i.e. added again without its position), home if needed, lights, nozzle tips, vacuum sensors, job readiness, feeder bus,
 orientation confirmations, pick checks (part-on / part-off vacuum checks of the loaded tips and the bottom-vision
-part size check: what would notice an empty pick or a part left on the nozzle), scripting engines (OpenPnP's <i>Pool scripting engines?</i> off makes every Lumen job hook
-load a new Python engine: ~0.6 s per feed / pick / placement), optional board Z. Steps added in a newer version run
+part size check: what would notice an empty pick or a part left on the nozzle), scripting engines (pooled automatically while a job runs, fresh code when stopped / paused;
+without it every Lumen job hook loads a new Python engine: ~0.6 s per feed / pick / placement), optional board Z. Steps added in a newer version run
 also when your preflight.json is older. Result PASS / WARN / FAIL; it does not start or block the job.</p>
 """ + MOVES % "only <i>home</i> (if the step is on and the machine is not homed).",
     "tips": {
