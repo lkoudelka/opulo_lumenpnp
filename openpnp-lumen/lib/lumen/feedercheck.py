@@ -120,28 +120,70 @@ def click_offset(ix, iy, size, upp):
     return (ix - size[0] / 2.0) * upp[0], -(iy - size[1] / 2.0) * upp[1]
 
 
+def _shifted(loc, dx, dy):
+    from org.openpnp.model import Location
+    mm = _units()
+    loc = loc.convertToUnits(mm)
+    return Location(mm, loc.getX() + dx, loc.getY() + dy, loc.getZ(), loc.getRotation())
+
+
+def offset_kind(feeder):
+    """How apply_pocket_offset moves this feeder's pick location: 'photon' (feeder offset in the slot frame),
+    'strip' (both reference holes), 'location' (tray and other feeders with one location), or None."""
+    if hasattr(feeder, "getSlot") and hasattr(feeder, "getOffset") and hasattr(feeder, "setOffset"):
+        return "photon"
+    if hasattr(feeder, "getReferenceHoleLocation") and hasattr(feeder, "getLastHoleLocation"):
+        return "strip"
+    if hasattr(feeder, "getLocation") and hasattr(feeder, "setLocation"):
+        return "location"
+    return None
+
+
 def apply_pocket_offset(feeder, dx, dy, limit_mm=2.0):
-    """Move the pick location by (dx, dy) mm (machine frame) onto the pocket centre.  Photon:
-    the feeder offset changes (pick = slot location + offset rotated by the slot); the result is
-    read back and reverted if it does not land where intended.  Returns (old, new) pick.
+    """Move the pick location by (dx, dy) mm (machine frame) onto the pocket centre.
+    - Photon: the feeder offset changes (pick = slot location + offset rotated by the slot);
+    - strip feeder: both reference holes move (the whole strip);
+    - tray and other feeders: the feeder location (first part) moves, so every tray position moves with it.
+    The result is read back and reverted if it does not land where intended.  Returns (old, new) pick.
     limit_mm guards the automatic (measured) offset; None = no limit (set by hand, confirmed)."""
     from org.openpnp.model import Location
     mm = _units()
     if limit_mm is not None and math.hypot(dx, dy) > limit_mm:
         raise ValueError("offset %.2f mm larger than %.1f mm: check the feeder by hand" % (math.hypot(dx, dy), limit_mm))
+    kind = offset_kind(feeder)
+    if kind is None:
+        raise ValueError("%s (%s): no location this tool can move" % (feeder.getName(), feeder.__class__.__name__))
     before = feeder.getPickLocation().convertToUnits(mm)
     target = (before.getX() + dx, before.getY() + dy)
-    old = feeder.getOffset()
-    rot = 0.0
-    if hasattr(feeder, "getSlot") and feeder.getSlot() is not None and feeder.getSlot().getLocation() is not None:
-        rot = feeder.getSlot().getLocation().getRotation()
-    a = math.radians(-rot)                               # machine frame -> slot frame
-    ox, oy = dx * math.cos(a) - dy * math.sin(a), dx * math.sin(a) + dy * math.cos(a)
-    o = old.convertToUnits(mm)
-    feeder.setOffset(Location(mm, o.getX() + ox, o.getY() + oy, o.getZ(), o.getRotation()))
+    if kind == "photon":
+        old = feeder.getOffset()
+        rot = 0.0
+        if feeder.getSlot() is not None and feeder.getSlot().getLocation() is not None:
+            rot = feeder.getSlot().getLocation().getRotation()
+        a = math.radians(-rot)                               # machine frame -> slot frame
+        ox, oy = dx * math.cos(a) - dy * math.sin(a), dx * math.sin(a) + dy * math.cos(a)
+        o = old.convertToUnits(mm)
+        feeder.setOffset(Location(mm, o.getX() + ox, o.getY() + oy, o.getZ(), o.getRotation()))
+
+        def revert():
+            feeder.setOffset(old)
+    elif kind == "strip":
+        old = (feeder.getReferenceHoleLocation(), feeder.getLastHoleLocation())
+        feeder.setReferenceHoleLocation(_shifted(old[0], dx, dy))
+        feeder.setLastHoleLocation(_shifted(old[1], dx, dy))
+
+        def revert():
+            feeder.setReferenceHoleLocation(old[0])
+            feeder.setLastHoleLocation(old[1])
+    else:
+        old = feeder.getLocation()
+        feeder.setLocation(_shifted(old, dx, dy))
+
+        def revert():
+            feeder.setLocation(old)
     after = feeder.getPickLocation().convertToUnits(mm)
     if math.hypot(after.getX() - target[0], after.getY() - target[1]) > 0.01:
-        feeder.setOffset(old)
+        revert()
         raise RuntimeError("offset did not move the pick location as intended (reverted)")
     return before, after
 

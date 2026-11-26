@@ -46,6 +46,62 @@ check("part-off: curves not apart -> none, says why", ps.propose_part_off([[(100
 check("free air = median after 1 s", ps.steady([(100, 250), (900, 240), (1100, 233), (1300, 234), (1400, 233)]) == 233)
 
 print("real log excerpt (bench 26 Nov)")
+# measure_free_air: the pump through the head's pump control around the valve (bench 26 Nov: valve alone -> 0)
+class _Act(object):
+    def __init__(self, name, calls, reads=None):
+        self.name, self.calls, self.reads = name, calls, reads
+
+    def actuate(self, on):
+        self.calls.append((self.name, on))
+
+    def read(self):
+        return self.reads()
+
+
+class _Head(object):
+    def __init__(self, calls):
+        self.calls = calls
+
+    def actuatePumpRequest(self, nozzle, on):
+        self.calls.append(("pump", on))
+
+
+class _Nozzle(object):
+    def __init__(self, calls, reads):
+        self.calls, self.h = calls, _Head(calls)
+        self.valve, self.sense = _Act("valve", calls), _Act("sense", calls, reads)
+
+    def getName(self):
+        return "N1"
+
+    def getPart(self):
+        return None
+
+    def getHead(self):
+        return self.h
+
+    def getVacuumActuator(self):
+        return self.valve
+
+    def getVacuumSenseActuator(self):
+        return self.sense
+
+
+calls = []
+curve = ps.measure_free_air(None, _Nozzle(calls, lambda: "233"), ms=30)
+check("free air: pump on before the valve, valve off then pump off; readings kept",
+      calls == [("pump", True), ("valve", True), ("valve", False), ("pump", False)] and curve and curve[0][1] == 233.0,
+      calls)
+calls = []
+try:
+    ps.measure_free_air(None, _Nozzle(calls, lambda: "0"), ms=30)
+    err = None
+except RuntimeError as e:
+    err = str(e)
+check("free air: sensor reading 0 throughout -> clear error (no vacuum), pump and valve off again",
+      err and "read 0" in err and calls[-2:] == [("valve", False), ("pump", False)], err)
+
+
 X = os.path.expanduser("~/claude/opulo/_testdata/picksafety/OpenPnP-20261126-keys.log")
 if os.path.isfile(X):
     rr = ps.parse_log(open(X).readlines(), {"N1": "VAC1", "N2": "VAC2"})

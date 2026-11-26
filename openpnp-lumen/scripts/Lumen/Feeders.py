@@ -108,7 +108,7 @@ class Model(AbstractTableModel):
         at = res.get("part_at_pick")
         at = "-" if "part_at_pick" not in res else "?" if at is None else "YES" if at else "EMPTY"
         pick = "-" if res.get("pocket_dx") is None else "%+.2f / %+.2f" % (res["pocket_dx"], res["pocket_dy"])
-        tape = res.get("method") or ("-" if x["photon"] else "(not a Photon feeder: camera only)")
+        tape = res.get("method") or ("-" if x["photon"] else "(not a Photon feeder: no automatic check, offset by hand)")
         job = x.get("job") or {}
         return {1: f.getName(), 3: unicode(part), 4: feederassign.short(job.get("refs", []), 5),
                 5: "" if not job else str(job["remaining"]), 6: tape, 7: at, 8: pick,
@@ -677,29 +677,65 @@ class PartCheck(object):
 
     # -- pick location set by hand: click the pocket centre in the check photo ----------------
     def hand_offset(self):
+        """Photo of the pick location, click the pocket, apply.  Any feeder whose pick location this tool can move
+        (Photon, tray, strip): the photo of the last check, or - not checked / not a Photon feeder - a new photo
+        taken now with the top camera at the pick location (camera only, no feed, no pick)."""
         x = self.clicked()
         if x is None:
             return
-        res = x.get("res") or {}
-        if not res.get("image") or not res.get("upp") or not os.path.isfile(res["image"]):
-            JOptionPane.showMessageDialog(self.frame, "Check this feeder first (Check selected): the offset is set by "
-                                                      "clicking in the photo of that check.")
-            return
-        from java.io import File
-        from javax.imageio import ImageIO
-        img = ImageIO.read(File(res["image"]))
         f = x["feeder"]
+        if feedercheck.offset_kind(f) is None:
+            JOptionPane.showMessageDialog(self.frame, "%s (%s): this tool cannot move its pick location; set it in "
+                                                      "the OpenPnP feeder editor." % (f.getName(), f.__class__.__name__))
+            return
         from org.openpnp.model import LengthUnit
         mm = LengthUnit.Millimeters
+        res = x.get("res") or {}
+        if res.get("image") and res.get("upp") and os.path.isfile(res["image"]):
+            from java.io import File
+            from javax.imageio import ImageIO
+            self.hand_window(x, f, res, ImageIO.read(File(res["image"])), res["size"], res["upp"], res.get("pick"))
+            return
+        # no check photo: one now, at the pick location
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return
+        if not machine.isHomed():
+            JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.")
+            return
+        try:
+            p = f.getPickLocation().convertToUnits(mm)
+        except (Exception, JavaException) as e:
+            JOptionPane.showMessageDialog(self.frame, "%s has no pick location: %s" % (f.getName(), e))
+            return
+        p0 = (p.getX(), p.getY(), p.getZ())
+        self.info.setText("%s: camera to the pick location (photo for the hand offset) ..." % f.getName())
+
+        def work():
+            try:
+                im, u = oppnp.run_machine_task(machine, lambda: feedercheck.photo_at(machine, p0[0], p0[1], p0[2]))
+                self.log("%s: hand offset photo at the pick location X %.3f Y %.3f" % (f.getName(), p0[0], p0[1]))
+
+                def show():
+                    self.info.setText("")
+                    x.setdefault("res", res)
+                    self.hand_window(x, f, res, im, (im.getWidth(), im.getHeight()), u, p0)
+                oppnp.on_ui(show)
+            except (Exception, JavaException) as e:
+                oppnp.on_ui(lambda: self.info.setText("%s: camera not moved: %s" % (f.getName(), e)))
+        oppnp.in_background(work)
+
+    def hand_window(self, x, f, res, img, size, upp, p0):
+        from org.openpnp.model import LengthUnit
+        mm = LengthUnit.Millimeters
+        photon = feedercheck.offset_kind(f) == "photon"
 
         def pick_now():
             p = f.getPickLocation().convertToUnits(mm)
             return p.getX(), p.getY(), p.getZ()
-        # where the shown photo was taken (absolute, mm): the check photo is centred on the pick location of that
-        # time.  Offsets count from the pick location NOW, so an Apply followed by another click on the same photo
-        # does not move twice.
-        p0 = res.get("pick") or pick_now()
-        state = {"click": None, "size": res["size"], "upp": res["upp"], "at": (p0[0], p0[1]), "z": p0[2], "busy": False,
+        # where the shown photo was taken (absolute, mm): centred on the pick location of that time.  Offsets count
+        # from the pick location NOW, so an Apply followed by another click on the same photo does not move twice.
+        p0 = p0 or pick_now()
+        state = {"click": None, "size": size, "upp": upp, "at": (p0[0], p0[1]), "z": p0[2], "busy": False,
                  "fid": None}                        # the nose fiducial run: feedercheck.go_to_fiducial() minus the image
 
         def centre():
@@ -741,7 +777,7 @@ class PartCheck(object):
             base = ("<b>%s</b> (slot %s, part %s): %s<br>Zoom in (mouse wheel), then <b>click the centre of the pick "
                     "pocket</b>. Red cross = pick location now%s, blue = your click. Pocket not in the photo: click "
                     "towards it and <i>Camera here</i> (new photo there), or <i>Camera to slot location</i>."
-                    % (f.getName(), res.get("slot"), f.getPart().getId() if f.getPart() else "-",
+                    % (f.getName(), res.get("slot") or slot_of(f, res) or "-", f.getPart().getId() if f.getPart() else "-",
                        x.get("status", ""), " (outside this photo when not shown)" if moved else " (photo centre)"))
             if moved:
                 base += "<br>Photo taken %+.2f / %+.2f mm from the pick location now." % c
@@ -854,18 +890,22 @@ class PartCheck(object):
             except (Exception, JavaException) as e:
                 JOptionPane.showMessageDialog(w, "Not applied: %s" % e)
 
-        fr, view = zoomview.image_window(
-            "Set offset by hand: %s" % f.getName(), img, "", overlay, click,
-            [("Camera here (new photo)", camera_here, "Move the camera to the point you clicked and take a new photo "
-              "there (to find a pocket outside this photo)."),
-             ("Camera to slot location", camera_slot, "Move the camera to the feeder's slot location (its rough position "
-              "captured at set-up) and take a new photo."),
-             ("Camera to feeder fiducial", camera_fiducial, "Move the camera to the round marks on the feeder nose "
-              "(about 13 mm from the pick location towards the nose), find the centre mark and show how far the pick "
-              "location is from it."),
-             ("Apply this offset", apply_click, "Move the pick location onto the point you clicked (any distance, "
-              "after a confirmation).")],
-            self.frame)
+        buttons = [("Camera here (new photo)", camera_here, "Move the camera to the point you clicked and take a new "
+                    "photo there (to find a pocket outside this photo).")]
+        if photon:
+            buttons += [("Camera to slot location", camera_slot, "Move the camera to the feeder's slot location (its "
+                         "rough position captured at set-up) and take a new photo."),
+                        ("Camera to feeder fiducial", camera_fiducial, "Move the camera to the round marks on the feeder "
+                         "nose (about 13 mm from the pick location towards the nose), find the centre mark and show how "
+                         "far the pick location is from it.")]
+        buttons.append(("Apply this offset", apply_click, "Move the pick location onto the point you clicked (any "
+                        "distance, after a confirmation). " + {
+                            "photon": "Photon feeder: its offset changes.",
+                            "strip": "Strip feeder: both reference holes move (the whole strip).",
+                            "location": "Tray / other feeder: its location moves, every tray position with it."}[
+                            feedercheck.offset_kind(f)]))
+        fr, view = zoomview.image_window("Set offset by hand: %s" % f.getName(), img, "", overlay, click, buttons,
+                                         self.frame)
         view.info.setText(text())
 
     def apply(self):
