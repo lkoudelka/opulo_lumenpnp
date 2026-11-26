@@ -198,13 +198,16 @@ class PickSafety(object):
 
         def work():
             try:
+                done_ = []
                 for n in nozzles:
-                    self.free[str(n.getName())] = oppnp.run_machine_task(self.machine,
-                                                                         lambda n=n: ps.measure_free_air(self.machine, n))
-                    self.log("free air %s: %s" % (n.getName(), " ".join("%d:%.0f" % c for c in self.free[str(n.getName())][::5])))
-                text = "free air: " + ", ".join("%s %.0f" % (k, ps.steady(v)) for k, v in sorted(self.free.items()))
+                    curve = oppnp.run_machine_task(self.machine, lambda n=n: ps.measure_free_air(self.machine, n))
+                    self.free[str(n.getName())] = curve
+                    self.log("free air %s: %s" % (n.getName(), " ".join("%d:%.0f" % c for c in curve[::5])))
+                    done_.append("%s %.0f" % (n.getName(), ps.steady(curve)))
+                text = "free air: " + ", ".join(done_)
             except (Exception, JavaException) as e:
                 text = "measurement failed: %s" % e
+                self.log(text)
 
             def done():
                 self.vmodel.rows = vacuum_rows(self.machine, self.parsed, self.free)

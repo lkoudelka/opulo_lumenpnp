@@ -263,8 +263,10 @@ def bottom_upp(machine):
 
 
 def measure_free_air(machine, nozzle, ms=1500):
-    """Vacuum on with the EMPTY nozzle (no motion), read as fast as possible for ms, vacuum off.  [(ms, v)].
-    Call inside a machine task; the person confirmed the nozzle is empty."""
+    """Pump + valve on with the EMPTY nozzle (no motion), read as fast as possible for ms, valve + pump off.
+    [(ms since the valve opened, v)].  Call inside a machine task; the person confirmed the nozzle is empty.
+    The pump goes through OpenPnP's head pump control like a pick (Lumen: the valve alone gives no vacuum, the sensor
+    then reads 0 - bench 2026-11-26)."""
     import time
     if nozzle.getPart() is not None:
         raise RuntimeError("%s holds a part" % nozzle.getName())
@@ -272,16 +274,24 @@ def measure_free_air(machine, nozzle, ms=1500):
     sense = nozzle.getVacuumSenseActuator()
     if valve is None or sense is None:
         raise RuntimeError("%s has no vacuum valve / sensor actuator" % nozzle.getName())
+    head = nozzle.getHead()
     curve = []
-    t0 = time.time()
-    valve.actuate(True)
+    head.actuatePumpRequest(nozzle, True)                # pump on (+ the head's pump-on wait)
     try:
-        while (time.time() - t0) * 1000.0 < ms:
-            v = float(str(sense.read()))
-            if v > 0:
-                curve.append(((time.time() - t0) * 1000.0, v))
+        t0 = time.time()
+        valve.actuate(True)
+        try:
+            while (time.time() - t0) * 1000.0 < ms:
+                v = float(str(sense.read()))
+                if v > 0:
+                    curve.append(((time.time() - t0) * 1000.0, v))
+        finally:
+            valve.actuate(False)
     finally:
-        valve.actuate(False)
+        head.actuatePumpRequest(nozzle, False)
+    if not curve:
+        raise RuntimeError("%s: the vacuum sensor read 0 the whole time (no vacuum: pump, valve or tubing?)"
+                           % nozzle.getName())
     return curve
 
 
