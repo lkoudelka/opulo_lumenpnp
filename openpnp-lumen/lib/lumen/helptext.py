@@ -429,6 +429,47 @@ HELP["feeders"]["columns"].update({
 })
 
 
+HELP["pick_safety"] = {
+    "title": "Pick safety - notice an empty nozzle or a part left on the nozzle, from measured values",
+    "html": """
+<p>Bench 2026-11-26: the nozzle came down on the cover foil, nothing was picked, and the part was "placed": the vacuum
+read 232 with the part-on range ending at 232 (free air 233), bottom vision accepted a 1 x 0 px "part" (no body size,
+size check off), and nothing checked after the place. Typing sizes and levels by hand for every part is not practical,
+so this window <b>learns them</b> and proposes; only ticked rows change, after a confirmation.</p>
+<p><b>Body sizes</b>: bottom vision measures every good pick very consistently (RES_0603: 1.45 x 0.80 mm every time,
+an empty nozzle 0.04 mm). The median of the good picks in OpenPnP's log becomes the package body size, in the
+orientation OpenPnP's size check compares. With the <b>size check</b> on (BodySize, generous tolerance) an empty
+nozzle fails bottom vision and OpenPnP picks again. Note: the size is what the bottom camera sees (e.g. only the leads
+of a SOD-323), which is right for this check.</p>
+<p><b>Vacuum</b>: <i>Measure free air</i> turns the vacuum on for 1.5 s per nozzle (empty, no motion). The part-on
+high limit goes halfway between the highest good pick and free air. The <b>part-off check</b> (OpenPnP turns the vacuum
+on for the probing time after a place: a part still on the nozzle seals it) is proposed only where free air and a
+part on the nozzle are clearly apart; it adds that time to every placement, so it is not ticked by default.</p>
+<p>Data source: the current OpenPnP log (picks after the last nozzle tip change). Changes are saved with OpenPnP's
+configuration.</p>
+""" + MOVES % "none; <i>Measure free air</i> switches the vacuum on for 1.5 s per nozzle (no motion).",
+    "tips": {
+        "Measure free air...": "Vacuum on for 1.5 s per nozzle with the EMPTY nozzle, no motion: the free-air level and its "
+                               "build-up (for the part-on and part-off proposals).",
+        "Apply ticked...": "Lists every change, applies after your OK, logs old and new values.",
+        "Close": "Close the window (nothing changes).",
+        "size check on": "Switch OpenPnP's bottom-vision size check to BodySize with a generous tolerance in the vision "
+                         "settings the job's parts use.",
+    },
+    "columns": {
+        "Apply": "Tick to set this package's body size to the measured one.", "Package": "Package id.",
+        "Job parts": "Parts of the open job with this package.",
+        "Measured W x H mm": "Median bottom-vision size of the good picks (OpenPnP's orientation).",
+        "Good picks": "Picks used for the median.", "Empty picks": "Picks where bottom vision saw nothing (accepted!).",
+        "Now W x H mm": "Current footprint body size.", "Note": "How the value was found, or why there is none.",
+        "Part-on": "Tick to set the proposed part-on high limit.", "Nozzle / tip": "Nozzle and its loaded tip.",
+        "Free air": "Measured with the empty nozzle (Measure free air).", "Part-on now": "Current part-on range.",
+        "Proposed high": "New high limit, or why none.", "Part-off": "Tick to switch the part-off check on.",
+        "Part-off proposal": "Probing time and limit, or why none.",
+    },
+}
+
+
 HELP["orientation"] = {
     "title": "Orientation Setup - pin 1 in the feeder vs. in the CAD footprint",
     "html": """
@@ -586,6 +627,8 @@ also when your preflight.json is older. Result PASS / WARN / FAIL; it does not s
         "checklist:": "The checklist file in use.",
         "Run checks": "Run all enabled steps in order.",
         "Edit checklist": "Open preflight.json in the editor.",
+        "Pick safety...": "Learned from the machine's own measurements: body sizes from bottom vision (+ size check), "
+                          "vacuum part-on high limit and part-off check. Proposals only; ticked rows change after your OK.",
         "Close": "Close the window.",
     },
     "columns": {"Step": "Check name.", "Result": "PASS / WARN / FAIL / SKIP.", "Detail": "What was found."},
