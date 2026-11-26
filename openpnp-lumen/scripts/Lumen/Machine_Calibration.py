@@ -376,7 +376,7 @@ class MachineCal(object):
                         break
                 else:
                     if "verify" in keys:
-                        self.say("Calibration complete. Next: File > New Job, then import the board (Feeder Assistant, "
+                        self.say("Calibration complete. Next: File > New Job, then import the board (Feeders: Assign feeders, "
                                  "Job Readiness).")
             finally:
                 try:

@@ -1,5 +1,5 @@
 # Scripts > Lumen > Feeder Part Check on feeders 50 (empty tape) and 48 (0402 caps): camera only
-g, cls = load_script("Feeder_Part_Check.py")
+g, cls = load_script("Feeders.py")
 d = g[cls]()
 names = {"0046000F4248570320363931": 50, "001980104648570520333535": 48}
 for x in d.model.rows:

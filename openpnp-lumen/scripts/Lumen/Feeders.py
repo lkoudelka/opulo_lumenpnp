@@ -1,4 +1,8 @@
-# Scripts > Lumen > Feeder Part Check
+# Scripts > Lumen > Feeders   (Feeder Part Check + Feeder Assistant, merged 2026-11-26)
+#
+# Tab "Job feeders": the feeders of the open job (untick the filter: all Photon feeders), with their references, how
+# many are left and the job status.  << Previous / Next >> / double-click: the top camera goes to the feeder.
+# Tab "Assign feeders": parts of a new board / panel without a feeder -> matching set-up feeders (lumen.feederassign).
 #
 # Tick feeders and press Check: the top camera visits each pick location (camera only, no feed, no
 # nozzle down).  The pocket centre is found from the sprocket holes (EIA tape geometry: paper, clear
@@ -32,6 +36,8 @@ import lumen.pickvac
 import lumen.feederopts
 import lumen.jobinfo
 import lumen.zoomview
+import lumen.partmatch
+import lumen.feederassign
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
@@ -42,16 +48,19 @@ reload(lumen.pickvac)
 reload(lumen.feederopts)
 reload(lumen.jobinfo)
 reload(lumen.zoomview)
-from lumen import feedercheck, feederopts, feedwatch, jobinfo, oppnp, pickvac, zoomview
+reload(lumen.partmatch)
+reload(lumen.feederassign)
+from lumen import feederassign, feedercheck, feederopts, feedwatch, jobinfo, oppnp, pickvac, zoomview
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout, Font, GridLayout
+from java.awt.event import MouseAdapter
 from java.lang import Boolean, Double, Integer, String
 from javax.swing import (BorderFactory, DefaultCellEditor, JButton, JCheckBox, JComboBox, JFrame, JLabel, JOptionPane, JPanel,
                          JScrollPane, JTabbedPane, JTable, JTextField, RowFilter, WindowConstants)
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer, TableCellRenderer
 
-COLS = ["Check", "Feeder", "Slot", "Part", "Tape", "Part at pick", "Pick vs pocket mm", "Result"]
+COLS = ["Check", "Feeder", "Slot", "Part", "References", "Left", "Tape", "Part at pick", "Pick vs pocket mm", "Result"]
 # options per feeder (lumen.feederopts): column -> option key
 OCOLS = ["Feeder", "Slot", "Part", "While feeding", "Every N", "Confirm", "Skip if part", "Max mm", "Vac check",
          "Vac threshold", "Edge pick action", "Return fails: feed next", "Own values"]
@@ -85,7 +94,7 @@ class Model(AbstractTableModel):
         return Boolean if c == 0 else Integer if c == 2 else String
 
     def isCellEditable(self, r, c):
-        return c == 0 and not self.locked
+        return c == 0 and not self.locked and self.rows[r]["photon"]
 
     def getValueAt(self, r, c):
         x = self.rows[r]
@@ -99,8 +108,11 @@ class Model(AbstractTableModel):
         at = res.get("part_at_pick")
         at = "-" if "part_at_pick" not in res else "?" if at is None else "YES" if at else "EMPTY"
         pick = "-" if res.get("pocket_dx") is None else "%+.2f / %+.2f" % (res["pocket_dx"], res["pocket_dy"])
-        tape = res.get("method") or "-"
-        return {1: f.getName(), 3: str(part), 4: tape, 5: at, 6: pick, 7: x.get("status", "")}[c]
+        tape = res.get("method") or ("-" if x["photon"] else "(not a Photon feeder: camera only)")
+        job = x.get("job") or {}
+        return {1: f.getName(), 3: unicode(part), 4: feederassign.short(job.get("refs", []), 5),
+                5: "" if not job else str(job["remaining"]), 6: tape, 7: at, 8: pick,
+                9: x.get("status") or ("job: %s" % job["status"] if job else "")}[c]
 
     def setValueAt(self, v, r, c):
         if c == 0:
@@ -141,7 +153,7 @@ class OptModel(AbstractTableModel):
         if c == 1:
             return slot_of(f)
         if c == 2:
-            return str(f.getPart().getId()) if f.getPart() is not None else "-"
+            return unicode(f.getPart().getId()) if f.getPart() is not None else "-"
         if c == 12:
             return feederopts.summary(data, x["hwid"])
         e = feederopts.effective(data, x["hwid"])
@@ -217,7 +229,7 @@ class JobFilter(RowFilter):
         self.owner = owner
 
     def include(self, entry):
-        return self.owner.shown(self.owner.model.rows[entry.getIdentifier()])
+        return self.owner.shown(entry.getModel().rows[entry.getIdentifier()])
 
 
 def job_part_ids(gui):
@@ -228,7 +240,7 @@ def job_part_ids(gui):
         return None
     if job is None:
         return None
-    return set(str(pl.getPart().getId()) for bl, pl, placed in jobinfo.job_placements(job) if pl.getPart() is not None)
+    return set(unicode(pl.getPart().getId()) for bl, pl, placed in jobinfo.job_placements(job) if pl.getPart() is not None)
 
 
 def verdict(res):
@@ -255,25 +267,35 @@ class PartCheck(object):
         self.opt_model = OptModel(self)
         feeders = [f for f in machine.getFeeders() if isinstance(f, PhotonFeeder)]
         feeders.sort(key=lambda f: (f.getSlotAddress() is None, f.getSlotAddress() or 0, f.getName()))
-        self.model.rows = [{"feeder": f, "sel": False, "hwid": str(f.getHardwareId()).upper()} for f in feeders]
-        self.opt_model.rows = self.model.rows
+        self.model.rows = [{"feeder": f, "sel": False, "hwid": str(f.getHardwareId()).upper(), "photon": True}
+                           for f in feeders]
+        self.opt_model.rows = list(self.model.rows)                 # options: Photon feeders only
+        self.add_job_info()
         self.busy = False
         dflt = feederopts.defaults(self.settings.data)
         pv = dict(pickvac.DEFAULTS)
         pv.update(self.settings.get("pickvac", {}) or {})
-        fr = self.frame = JFrame("Feeder part check (camera only)")
+        fr = self.frame = JFrame("Feeders")
         fr.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE)
         root = JPanel(BorderLayout(6, 6))
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
-        self.info = JLabel("Tick feeders and press Check selected (camera only). Help above explains every option.")
+        self.info = JLabel("Next >> walks the camera over the job's feeders; tick feeders and press Check selected (camera "
+                           "only). Help above explains every option.")
         root.add(self.info, BorderLayout.NORTH)
         self.tabs = JTabbedPane()
         # -- tab 1: check now ------------------------------------------------------------------
         t1 = JPanel(BorderLayout(6, 6))
         self.table = JTable(self.model)
         self.table.setAutoCreateRowSorter(True)
-        for i, w in enumerate((50, 220, 45, 190, 170, 90, 120, 420)):
+        for i, w in enumerate((45, 210, 40, 190, 170, 40, 150, 80, 110, 330)):
             self.table.getColumnModel().getColumn(i).setPreferredWidth(w)
+        owner = self
+
+        class _Dbl(MouseAdapter):
+            def mouseClicked(self, e):
+                if e.getClickCount() == 2:
+                    owner.camera_row(owner.table.getSelectedRow())
+        self.table.addMouseListener(_Dbl())
         sp = JScrollPane(self.table)
         sp.setPreferredSize(Dimension(1380, 360))
         t1.add(sp, BorderLayout.CENTER)
@@ -285,7 +307,7 @@ class PartCheck(object):
         b.add(JButton("Apply offset to selected", actionPerformed=lambda e: self.apply()))
         b.add(JButton("Set offset by hand (photo)...", actionPerformed=lambda e: self.hand_offset()))
         t1.add(b, BorderLayout.SOUTH)
-        self.tabs.addTab("Check", None, t1, lumen.helptext.HELP["part_check"]["tabs"]["Check"])
+        self.tabs.addTab("Job feeders", None, t1, lumen.helptext.HELP["feeders"]["tabs"]["Job feeders"])
         # -- tab 2: options per feeder ---------------------------------------------------------------
         t2 = JPanel(BorderLayout(6, 6))
         defs = JPanel(GridLayout(0, 1))
@@ -344,17 +366,23 @@ class PartCheck(object):
                       "the edit applies to all of them."))
         ob.add(JButton("Reset highlighted to defaults", actionPerformed=lambda e: self.reset_highlighted()))
         t2.add(ob, BorderLayout.SOUTH)
-        self.tabs.addTab("Options per feeder", None, t2, lumen.helptext.HELP["part_check"]["tabs"]["Options per feeder"])
+        self.tabs.addTab("Options per feeder", None, t2, lumen.helptext.HELP["feeders"]["tabs"]["Options per feeder"])
+        # -- tab 3: assign feeders to a new board / panel (was Feeder Assistant) -----------------------
+        self.assign = feederassign.FeederAssign(machine, gui, scripting, fr)
+        self.tabs.addTab("Assign feeders (new board)", None, self.assign.panel,
+                         lumen.helptext.HELP["feeders"]["tabs"]["Assign feeders (new board)"])
         root.add(self.tabs, BorderLayout.CENTER)
         b2 = JPanel(FlowLayout(FlowLayout.RIGHT))
-        self.job_only = JCheckBox("only feeders of the open job", bool(self.settings.get("part_check_job_only", False)))
+        self.job_only = JCheckBox("only feeders of the open job", bool(self.settings.get("part_check_job_only", True)))
         self.job_only.addActionListener(lambda e: self.apply_filter())
         b2.add(self.job_only)
-        b2.add(JButton("Go to pick location", actionPerformed=lambda e: self.go_to()))
+        b2.add(JButton("<< Previous", actionPerformed=lambda e: self.camera_step(-1)))
+        b2.add(JButton("Camera to feeder", actionPerformed=lambda e: self.go_to()))
+        b2.add(JButton("Next >>", actionPerformed=lambda e: self.camera_step(1)))
         b2.add(JButton("Identify (blink LED)", actionPerformed=lambda e: self.identify()))
         b2.add(JButton("Close", actionPerformed=lambda e: fr.dispose()))
         root.add(b2, BorderLayout.SOUTH)
-        fr.setContentPane(lumen.uihelp.wrap(root, "part_check"))
+        fr.setContentPane(lumen.uihelp.wrap(root, "feeders"))
         fr.pack()
         fr.setLocationRelativeTo(gui)
         self.job_parts = None
@@ -366,9 +394,25 @@ class PartCheck(object):
         if not self.job_only.isSelected():
             return True
         part = x["feeder"].getPart()
-        return part is not None and self.job_parts is not None and str(part.getId()) in self.job_parts
+        return part is not None and self.job_parts is not None and unicode(part.getId()) in self.job_parts
+
+    def add_job_info(self):
+        """References / left / status of the open job per feeder (jobinfo.tour); the job's feeders that are not
+        Photon feeders (tray, strip, ...) get a row too: camera round only."""
+        try:
+            tour = jobinfo.tour(gui.getJobTab().getJob(), machine)
+        except (Exception, JavaException):
+            tour = []
+        by = dict((x["feeder"], x) for x in tour if x["feeder"] is not None)
+        have = set(x["feeder"] for x in self.model.rows)
+        for x in self.model.rows:
+            x["job"] = by.get(x["feeder"])
+        for f, t in sorted(by.items(), key=lambda kv: kv[0].getName()):
+            if f not in have:
+                self.model.rows.append({"feeder": f, "sel": False, "hwid": str(f.getId()), "photon": False, "job": t})
 
     def apply_filter(self):
+        self.add_job_info()
         on = self.job_only.isSelected()
         self.settings.set("part_check_job_only", on)
         self.job_parts = job_part_ids(gui) if on else None
@@ -381,7 +425,7 @@ class PartCheck(object):
             self.info.setText("%d feeder(s) of the open job shown (%d part types in the job); untick to see all %d."
                               % (n, len(self.job_parts), len(self.model.rows)))
         else:
-            self.info.setText("All %d Photon feeders shown." % len(self.model.rows))
+            self.info.setText("All %d feeders shown (every Photon feeder, and the job's other feeders)." % len(self.model.rows))
         # hidden rows are not ticked: Check / Apply only act on what you see
         for x in self.model.rows:
             if not self.shown(x):
@@ -479,7 +523,7 @@ class PartCheck(object):
         if job is not None:
             for bl, pl, placed in jobinfo.job_placements(job):
                 if pl.getPart() is not None:
-                    parts[str(pl.getPart().getId())] = pl.getPart()
+                    parts[unicode(pl.getPart().getId())] = pl.getPart()
         return [p for p in parts.values() if p.getPickRetryCount() < 1]
 
     def pick_retries(self):
@@ -500,30 +544,82 @@ class PartCheck(object):
 
     # -- one feeder: go to / identify -----------------------------------------------------
     def clicked(self):
-        t = self.opt_table if self.tabs.getSelectedIndex() == 1 else self.table
+        tab = self.tabs.getSelectedIndex()
+        if tab == 2:
+            f = self.assign.selected_feeder()
+            if f is None:
+                JOptionPane.showMessageDialog(self.frame, "Select a feeder in the lower list first.")
+                return None
+            return {"feeder": f, "photon": hasattr(f, "getHardwareId"), "job": None}
+        t = self.opt_table if tab == 1 else self.table
         i = t.getSelectedRow()
         if i < 0:
             JOptionPane.showMessageDialog(self.frame, "Click a feeder row first.")
             return None
-        return self.model.rows[t.convertRowIndexToModel(i)]
+        return t.getModel().rows[t.convertRowIndexToModel(i)]
 
     def go_to(self):
-        x = self.clicked()
-        if x is None or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move"):
+        if self.tabs.getSelectedIndex() == 0:
+            self.camera_row(self.table.getSelectedRow())
             return
+        x = self.clicked()
+        if x is not None:
+            self.camera_to(x, "")
+
+    def camera_step(self, d):
+        """<< Previous / Next >>: the camera round over the rows shown in 'Job feeders' (wraps round)."""
+        self.tabs.setSelectedIndex(0)
+        n = self.table.getRowCount()
+        if n == 0:
+            JOptionPane.showMessageDialog(self.frame, "No feeder shown (no job open? untick 'only feeders of the open job').")
+            return
+        cur = self.table.getSelectedRow()
+        self.camera_row((0 if d > 0 else n - 1) if cur < 0 else (cur + d) % n)
+
+    def camera_row(self, vi):
+        if vi < 0 or vi >= self.table.getRowCount():
+            JOptionPane.showMessageDialog(self.frame, "Click a feeder row (or press Next >>).")
+            return
+        self.table.setRowSelectionInterval(vi, vi)
+        self.table.scrollRectToVisible(self.table.getCellRect(vi, 0, True))
+        x = self.model.rows[self.table.convertRowIndexToModel(vi)]
+        self.camera_to(x, "%d / %d: " % (vi + 1, self.table.getRowCount()))
+
+    def camera_to(self, x, pos):
+        f = x["feeder"]
+        if self.busy or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+            return
+        if not machine.isHomed():
+            JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.")
+            return
+        self.busy = True
+        self.info.setText("camera to %s ..." % f.getName())
+        job = x.get("job") or {}
 
         def work():
             try:
-                pick = oppnp.run_machine_task(machine, lambda: feedercheck.go_to(machine, x["feeder"]))
-                oppnp.on_ui(lambda: self.info.setText("camera at the pick location of %s: %.3f / %.3f" % (
-                    x["feeder"].getName(), pick.getX(), pick.getY())))
+                pick = oppnp.run_machine_task(machine, lambda: feedercheck.go_to(machine, f))
+                slot = slot_of(f, x.get("res"))
+                text = "%scamera at slot %s, %s - %s%s (X %.3f Y %.3f)" % (
+                    pos, "?" if slot is None else slot, f.getName(), f.getPart().getId() if f.getPart() else "-",
+                    " (%s), %s left, %s" % (feederassign.short(job["refs"], 4), job["remaining"], job["status"])
+                    if job else "", pick.getX(), pick.getY())
+                self.log(text)
             except (Exception, JavaException) as e:
-                oppnp.on_ui(lambda: self.info.setText("go to failed: %s" % e))
+                text = "camera not moved to %s: %s" % (f.getName(), e)
+            finally:
+                self.busy = False
+            oppnp.on_ui(lambda: self.info.setText(text))
         oppnp.in_background(work)
 
     def identify(self):
         x = self.clicked()
-        if x is None or not oppnp.confirm_ready(machine, gui, self.frame, "Cannot identify"):
+        if x is None:
+            return
+        if not x["photon"]:
+            JOptionPane.showMessageDialog(self.frame, "%s is not a Photon feeder: no LED." % x["feeder"].getName())
+            return
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot identify"):
             return
 
         def work():
@@ -537,7 +633,7 @@ class PartCheck(object):
     # -- check --------------------------------------------------------------------------
     def select(self, pred):
         for x in self.model.rows:
-            x["sel"] = pred(x) and self.shown(x)
+            x["sel"] = pred(x) and self.shown(x) and x["photon"]
         self.model.fireTableDataChanged()
 
     def selected(self):

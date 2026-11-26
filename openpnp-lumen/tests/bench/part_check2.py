@@ -3,7 +3,7 @@ import json
 from java.util import HashMap
 from org.openpnp.model import Configuration
 HW = {"001980104648570520333535": 48, "000F001C4648570420333535": 26, "0018800B4648570520333535": 27, "000980084648570620333535": 3}
-g, cls = load_script("Feeder_Part_Check.py")
+g, cls = load_script("Feeders.py")
 d = g[cls]()
 for x in d.model.rows:
     x["sel"] = x["hwid"] in HW

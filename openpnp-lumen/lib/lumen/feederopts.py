@@ -2,7 +2,7 @@
 """Feeder options per feeder (pure Python: CPython tests and Jython in OpenPnP).
 
 Every Photon feeder can have its own value for each option below; an option without an own value
-takes the default (Feeder Part Check, "Defaults" = settings.json keys "feedwatch" and "pickvac").
+takes the default (Scripts > Lumen > Feeders, "Defaults" = settings.json keys "feedwatch" and "pickvac").
 Own values: settings.json key "feeder_options" = {HARDWARE_ID: {option: value, ...}}.
 The options follow the physical feeder (hardware id), not the part or the slot.
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pick location centring while feeding (Feeder.BeforeFeed hook, Jython, OpenPnP).
 
-For the feeders with "While feeding" on (Scripts > Lumen > Feeder Part Check, options per feeder:
+For the feeders with "While feeding" on (Scripts > Lumen > Feeders, options per feeder:
 lumen.feederopts), every N-th feed of that feeder:
 the top camera looks at the pick pocket before the feed;
 - a part already in the pick pocket -> OpenPnP's feed option SkipNext (this feed is skipped);

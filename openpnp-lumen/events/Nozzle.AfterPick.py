@@ -1,5 +1,5 @@
 # Lumen: pick vacuum check (linked by openpnp-lumen install.sh).
-# Does nothing unless enabled in Scripts > Lumen > Feeder Part Check ("Pick vacuum check").
+# Does nothing unless enabled in Scripts > Lumen > Feeders ("Pick vacuum check").
 # An edge pick seals worse -> vacuum closer to free air than the feeder's typical pick -> the next
 # feed of that feeder runs the camera re-centring check, or (action "repick") the pick is made to
 # fail on purpose so OpenPnP recycles the part and picks again.  Raises into the job ONLY for that.

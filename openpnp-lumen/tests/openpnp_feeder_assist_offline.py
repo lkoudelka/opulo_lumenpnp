@@ -112,16 +112,23 @@ class G(object):
         return Tab()
 
 
+PC = []
+
+
 def open_tool():
-    src = open(os.path.join(ROOT, "scripts", "Lumen", "Feeder_Assistant.py")).read().rstrip().split("\n")
+    """Scripts > Lumen > Feeders (Part Check + Assistant merged); returns its 'Assign feeders' tab and the window."""
+    src = open(os.path.join(ROOT, "scripts", "Lumen", "Feeders.py")).read().rstrip().split("\n")
     g = {"__name__": "__main__", "scripting": Scr(), "machine": machine, "gui": G()}
-    code = compile("\n".join(src[:-1]) + "\n", "Feeder_Assistant.py", "exec")
+    code = compile("\n".join(src[:-1]) + "\n", "Feeders.py", "exec")
     exec(code, g)
     g["JFrame"] = Frame
     g["JOptionPane"] = Pane
     g["oppnp"].JOptionPane = Pane
+    g["feederassign"].JOptionPane = Pane
     Frame.instances = []
-    return g["FeederAssistant"](), Frame.instances[0].content
+    pc = g["PartCheck"]()
+    PC[:] = [pc, g]
+    return pc.assign, Frame.instances[0].content
 
 
 def render(panel, name):
@@ -143,7 +150,7 @@ def render(panel, name):
 
 S.out.println("proposals")
 fa, content = open_tool()
-check("every option / button / column described", not uihelp.missing(content, "feeder_assist"), uihelp.missing(content, "feeder_assist")[:5])
+check("every option / button / column described", not uihelp.missing(content, "feeders"), uihelp.missing(content, "feeders")[:5])
 rows = dict((x["id"], x) for x in fa.pmodel.rows)
 check("the renamed parts are listed (no feeder holds them)", all(p[0] in rows for p in RENAME.values()), sorted(rows))
 check("parts that have an enabled feeder are hidden", "C_0402_1005Metric-1u" not in rows or not any(
@@ -168,47 +175,45 @@ check("feeder list: matching feeders on top, then a separator, then every other 
       sep and all(r.get("score") is not None for r in fr[:sep[0]]) and all(r.get("score") is None for r in fr[sep[0] + 1:])
       and len(fr) - 1 == nfeed, (sep, len(fr), nfeed))
 check("the 100n proposal warns that 16V is needed and the feeder part does not say", any("16V" in w for w in fr[0]["warn"]), fr[0]["warn"])
-S.out.println("job feeders: camera round")
-tr = fa.tmodel.rows
-withf = [r for r in tr if r["feeder"] is not None]
-slots = [r["slot"] for r in withf if r["slot"] is not None]
-check("tab 1 lists the job's feeders in slot order, parts without a feeder last",
-      withf and slots == sorted(slots) and all(r["feeder"] is None for r in tr[len(withf):])
-      and any(r["feeder"] is None for r in tr), (slots[:8], len(withf), len(tr)))
+S.out.println("job feeders: camera round (Feeders, tab 1)")
+pc, gpc = PC
 from lumen import jobinfo as _ji
-check("every job part with a feeder is in the round", set(r["part_id"] for r in withf) == set(
-    r["part_id"] for r in _ji.readiness(job, machine, lumen_profile=False) if r["feeders"]))
+pc.job_only.setSelected(True)
+pc.apply_filter()
+view = [pc.model.rows[pc.table.convertRowIndexToModel(i)] for i in range(pc.table.getRowCount())]
+want = set(f for r in _ji.readiness(job, machine, lumen_profile=False) for f in r["feeders"])
+check("tab 1 shows exactly the job's feeders (also non-Photon ones, camera only), refs / left / status filled",
+      set(x["feeder"] for x in view) == want and all(x.get("job") for x in view), (len(view), len(want)))
 gone = []
-G_FA = fa.tour_camera.im_func.func_globals
 from org.openpnp.model import Location as _Loc, LengthUnit as _LU
-G_FA["feedercheck"].go_to = lambda m, f: (gone.append(f) or _Loc(_LU.Millimeters, 10.0, 20.0, 0.0, 0.0))
-G_FA["oppnp"].run_machine_task = lambda m, fn: fn()
-G_FA["oppnp"].in_background = lambda fn: fn()
-G_FA["oppnp"].on_ui = lambda fn: fn()
-G_FA["oppnp"].confirm_ready = lambda *a: True
+gpc["feedercheck"].go_to = lambda m, f: (gone.append(f) or _Loc(_LU.Millimeters, 10.0, 20.0, 0.0, 0.0))
+gpc["oppnp"].run_machine_task = lambda m, fn: fn()
+gpc["oppnp"].in_background = lambda fn: fn()
+gpc["oppnp"].on_ui = lambda fn: fn()
+gpc["oppnp"].confirm_ready = lambda *a: True
 _h = machine.isHomed()
 machine.setHomed(True)
-fa.ttable.clearSelection()
+pc.table.clearSelection()
 for _ in range(3):
-    fa.tour_step(1)
-check("Next x3: camera to the first three feeders in order",
-      gone == [r["feeder"] for r in withf[:3]] and fa.ttable.getSelectedRow() == tr.index(withf[2]), [f.getName() for f in gone])
-check("status line says where the camera is ('3 / N: camera at slot ...')", fa.tour_info.getText().startswith("3 / %d: camera at slot " % len(withf))
-      and "%s - %s" % (withf[2]["feeder"].getName(), withf[2]["part_id"]) in fa.tour_info.getText(),
-      fa.tour_info.getText())
-fa.tour_step(-1)
-check("Previous: back to the second feeder", gone[-1] == withf[1]["feeder"])
-fa.ttable.setRowSelectionInterval(tr.index(withf[-1]), tr.index(withf[-1]))
-fa.tour_step(1)
-check("Next after the last feeder wraps to the first", gone[-1] == withf[0]["feeder"])
+    pc.camera_step(1)
+check("Next x3: camera to the first three feeders in list order",
+      gone == [x["feeder"] for x in view[:3]] and pc.table.getSelectedRow() == 2, [f.getName() for f in gone])
+check("status line says where the camera is ('3 / N: camera at slot ...', feeder, part, refs, left)",
+      pc.info.getText().startswith("3 / %d: camera at slot " % len(view)) and view[2]["feeder"].getName() in pc.info.getText()
+      and "left" in pc.info.getText(), pc.info.getText())
+pc.camera_step(-1)
+check("Previous: back to the second feeder", gone[-1] == view[1]["feeder"])
+pc.table.setRowSelectionInterval(len(view) - 1, len(view) - 1)
+pc.camera_step(1)
+check("Next after the last feeder wraps to the first", gone[-1] == view[0]["feeder"])
 machine.setHomed(False)
 n = len(gone)
-fa.tour_step(1)
+pc.camera_step(1)
 check("not homed: camera not moved, said so", len(gone) == n and any("not homed" in str(m) for m in Pane.shown[-1:]), Pane.shown[-1:])
 machine.setHomed(_h)
-fa.tabs.setSelectedIndex(0)
-render(content, "feeder-assistant-job.png")
-fa.tabs.setSelectedIndex(1)
+pc.tabs.setSelectedIndex(0)
+render(content, "feeders-job.png")
+pc.tabs.setSelectedIndex(2)
 render(content, "feeder-assistant.png")
 # nothing changed yet
 check("nothing changed before Apply (placements still use the new part, board file untouched)",
