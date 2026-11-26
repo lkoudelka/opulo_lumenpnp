@@ -24,6 +24,8 @@ import lumen.nozzlecal
 import lumen.machinecal
 import lumen.homeguard
 import lumen.lastjob
+import lumen.picksafety
+import lumen.picksafetyui
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
@@ -35,7 +37,9 @@ reload(lumen.nozzlecal)
 reload(lumen.machinecal)
 reload(lumen.homeguard)
 reload(lumen.lastjob)
-from lumen import homeguard, jobinfo, lastjob, machinecal, oppnp, photon
+reload(lumen.picksafety)
+reload(lumen.picksafetyui)
+from lumen import homeguard, jobinfo, lastjob, machinecal, oppnp, photon, picksafetyui
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
@@ -218,7 +222,8 @@ def st_pick_checks(cfg, ctx):
             bad.append("bottom vision part size check off (BVS_Default): an empty nozzle passes bottom vision")
     except (Exception, JavaException):
         pass
-    return not bad, "; ".join(bad + [x for x in out if x not in bad]) or "part-on / part-off / size checks on"
+    return not bad, ("; ".join(bad + [x for x in out if x not in bad]) or "part-on / part-off / size checks on") + (
+        " -> 'Pick safety...' proposes the values" if bad else "")
 
 
 HOOKS = ("Feeder.BeforeFeed.py", "Nozzle.AfterPick.py", "Job.Placement.Complete.py", "Job.Error.py")
@@ -373,6 +378,7 @@ class Preflight(object):
         b = JPanel(FlowLayout(FlowLayout.RIGHT))
         self.run_btn = JButton("Run checks", actionPerformed=lambda e: self.run())
         b.add(self.run_btn)
+        b.add(JButton("Pick safety...", actionPerformed=lambda e: self.pick_safety()))
         b.add(JButton("Edit checklist", actionPerformed=lambda e: self.edit()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
@@ -383,6 +389,10 @@ class Preflight(object):
         if self.cfg.get("_error"):
             self.model.rows = [["checklist", "FAIL", self.cfg["_error"]]]
             self.model.fireTableDataChanged()
+
+    def pick_safety(self):
+        """Body sizes from bottom vision + size check, vacuum part-on / part-off limits: learned, proposed, ticked."""
+        self.safety = picksafetyui.PickSafety(machine, gui, scripting, self.frame, self.log)
 
     def edit(self):
         try:
