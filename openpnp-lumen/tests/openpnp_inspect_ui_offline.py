@@ -38,6 +38,9 @@ class Frame(object):
     def setVisible(self, v):
         self.visible = v
 
+    def setContentPane(self, c):
+        self.content = c
+
 
 class Pane(object):
     OK_OPTION = 0
@@ -139,17 +142,79 @@ check("second run uses the golden: ok ~1.0, missing < fail limit", g2[0] and g2[
 fail = caps[2]
 vi = d.table.convertRowIndexToView(d.model.rows.index(fail))
 d.table.setRowSelectionInterval(vi, vi)
-shown = []
-g["zoomview"].image_window = lambda title, img, html, overlay=None, on_click=None, buttons=(), parent=None: \
-    shown.append((title, img, html, [b[0] for b in buttons]))
-d.show_image()
-check("Show image: zoomable window with the result drawn in, Camera to part / Set as OK there",
-      shown and fail["ref"] in shown[0][0] and "Cyan dashed" in shown[0][2] and shown[0][3] == ["Camera to part", "Set as OK", "Set as NOT OK..."]
-      and shown[0][1] is not fail["res"]["_image"], shown[:1] and shown[0][3])
+iv = g["inspectview"]
+iv.JFrame = Frame
+iv.JOptionPane = Pane
+v = d.show_image()
+check("Show image: one window with the result drawn in, << Previous / Next >>, Camera to part / Set as OK / NOT OK / "
+      "Draw where the part is", v is not None and v.x is fail and v.view.image is not None
+      and v.view.image is not fail["res"]["_image"] and sorted(v.buttons) == sorted(iv.BUTTONS), v and sorted(v.buttons))
+order = [x["ref"] for x in v.rows()]
+seen = [v.x["ref"]]
+v.step(-1)
+while v.x["ref"] != seen[-1]:
+    seen.append(v.x["ref"])
+    v.step(-1)
+first = v.x
+for _ in range(len(order) + 1):
+    v.step(1)
+check("Previous / Next walk the inspected rows in the table's order and stop at the ends",
+      first["ref"] == order[0] and v.x["ref"] == order[-1] and len(order) == 3, (order, first["ref"], v.x["ref"]))
+v.only_bad.setSelected(True)
+check("'only not OK': Next / Previous skip the OK rows", all(not x["res"]["verdict"].startswith("OK") or x is v.x
+                                                           for x in v.rows()), [x["ref"] for x in v.rows()])
+v.only_bad.setSelected(False)
+if os.environ.get("INSPECT_PNG"):                       # look at the window: render it headless
+    from java.awt.image import BufferedImage
+    from java.awt import Graphics2D
+
+    def _lay(c):
+        c.doLayout()
+        for k in c.getComponents():
+            _lay(k)
+    pnl = v.frame.content
+    pnl.setSize(pnl.getPreferredSize())
+    _lay(pnl)
+    _bi = BufferedImage(pnl.getWidth(), pnl.getHeight(), BufferedImage.TYPE_INT_RGB)
+    _g = _bi.createGraphics()
+    pnl.paint(_g)
+    Graphics2D.dispose(_g)
+    ImageIO.write(_bi, "png", File(os.environ["INSPECT_PNG"]))
+# the offset row: detection says CHECK; the operator draws the part where it really is (here: around the image centre)
+off_row = caps[1]
+v.show(off_row)
+im = off_row["res"]["_image"]
+cx, cy, hw, hh = im.getWidth() / 2.0, im.getHeight() / 2.0, 0.5 / truth["upp"], 0.25 / truth["upp"]
+v.draw()
+check("Draw where the part is: the picture switches to rectangle mode", v.view.on_rect is not None)
+v.drawn(cx - hw, cy - hh, cx + hw, cy + hh)
+r = off_row["res"]
+lp = os.path.join(d.root, "learning", d.run_name(off_row), "meta.json")
+lm = json.load(open(lp))["parts"].get(off_row["ref"], {}) if os.path.isfile(lp) else {}
+check("drawn at the placement location: verdict OK from the drawn position, magenta box kept, back to pan mode",
+      r["verdict"].startswith("OK (part drawn by hand at +0.00 / +0.00") and r.get("hand_box") and v.view.on_rect is None,
+      r["verdict"])
+check("saved for learning: raw picture + meta (package, mm/px, rotation, the drawn box, truth ok, what was detected)",
+      lm.get("truth") == "ok" and lm.get("hand_box") and lm.get("upp") == truth["upp"] and lm["detected"]["found"]
+      and os.path.isfile(os.path.join(os.path.dirname(lp), off_row["ref"] + "-raw.png")), lm)
+gs = ins.load_golden(d.root, "C_0402_1005Metric")
+check("package with golden samples: one more sample, centred where the part was drawn",
+      gs and len(gs["samples"]) == 2 and "drawn by hand" in gs["samples"][1]["source"], gs and [x.get("source") for x in gs["samples"]])
+v.show(off_row)
+v.draw()
+v.drawn(cx - hw, cy - hh + 0.4 / truth["upp"], cx + hw, cy + hh + 0.4 / truth["upp"])
+check("drawn 0.4 mm off the location: CHECK offset (0402 allows 0.15) and truth 'shifted' for learning",
+      off_row["res"]["verdict"].startswith("CHECK: offset, part drawn by hand at +0.00 / -0.40")
+      and json.load(open(lp))["parts"][off_row["ref"]]["truth"] == "shifted", off_row["res"]["verdict"])
 was = fail["res"]["verdict"]
+vi = d.table.convertRowIndexToView(d.model.rows.index(fail))
+d.table.setRowSelectionInterval(vi, vi)
 d.set_ok()
 check("Set as OK (selected FAIL row, after the confirmation) -> 'OK (set by hand; was FAIL ...)'",
       fail["res"]["verdict"].startswith("OK (set by hand; was FAIL") and fail["res"].get("manual_ok"), fail["res"]["verdict"])
+gs = ins.load_golden(d.root, "C_0402_1005Metric")
+check("Set as OK learns: the confirmed placement is one more golden sample of its package",
+      gs and len(gs["samples"]) == 4 and "set as OK" in gs["samples"][-1]["source"], gs and [x.get("source") for x in gs["samples"]])
 d.select(lambda x: bool(x.get("res")) and not x["res"].get("verdict", "").startswith("OK"))
 check("Select not OK no longer ticks it", not fail["sel"])
 moved = []

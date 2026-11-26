@@ -7,8 +7,10 @@
 # - golden sample: once a good placement of a package is marked "golden", later inspections compare
 #   with it (rotated to the placement) -> match score, offset, and "matches better turned 180 deg"
 #   (polarity).
-# Verdict OK / CHECK / FAIL is an aid: every image is saved (~/.openpnp2/lumen/inspection/<job>-<time>/),
-# Export CSV writes the report.  Columns sort by clicking the header.
+# Verdict OK / CHECK / FAIL is an aid: every image is saved (~/.openpnp2/lumen/inspection/<job>-<time>/, with
+# <ref>.json: what was used and found), Export CSV writes the report.  Columns sort by clicking the header.
+# Show image: << Previous / Next >> through the results; Draw where the part is when the detection was wrong
+# (saved for learning in inspection/learning/, optionally one more golden sample); Set as OK adds golden samples.
 from __future__ import absolute_import, division, print_function
 
 import csv
@@ -26,6 +28,7 @@ import lumen.jobinfo
 import lumen.tapevision
 import lumen.inspect
 import lumen.zoomview
+import lumen.inspectview
 reload(lumen.oppnp)
 reload(lumen.helptext)
 reload(lumen.uihelp)
@@ -33,8 +36,9 @@ reload(lumen.jobinfo)
 reload(lumen.tapevision)
 reload(lumen.inspect)
 reload(lumen.zoomview)
+reload(lumen.inspectview)
 from lumen import inspect as ins
-from lumen import jobinfo, oppnp, zoomview
+from lumen import inspectview, jobinfo, oppnp, zoomview
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Dimension, FlowLayout
@@ -229,23 +233,54 @@ class Inspection(object):
         return "%s  %s" % (x["ref"], x["part"])
 
     def show_image(self):
-        """The saved picture with the result drawn in, zoomable; from there also Camera to part / Set as OK."""
+        """The picture with the result drawn in, zoomable, << Previous / Next >> through the inspected rows; there also
+        Camera to part, Set as OK / NOT OK and Draw where the part is (lumen.inspectview)."""
         x = self.selected_row()
         res = (x or {}).get("res") or {}
         if not res.get("_image") and not res.get("image"):
             JOptionPane.showMessageDialog(self.frame, "Select an inspected row.")
             return
-        img = ins.annotate(res["_image"], res, self.title(x)) if res.get("_image") is not None else \
-            ImageIO.read(File(res["image"]))
-        text = ("<b>%s</b> (%s, board %s): <b>%s</b><br>Cyan dashed: where the part should be (body size, placement "
-                "rotation), cross = placement location; coloured box: the body found. Saved: %s"
-                % (x["ref"], x["part"], x["board"], res.get("verdict", ""), res.get("image", "-")))
-        zoomview.image_window("Inspection: %s %s" % (x["ref"], x["part"]), img, text, buttons=[
-            ("Camera to part", lambda w: self.camera_to_part(x), "Top camera over this placement (part top in focus)."),
-            ("Set as OK", lambda w: self.set_ok([x], w), "Accept this placement as OK (your decision, logged)."),
-            ("Set as NOT OK...", lambda w: self.set_not_ok([x], w), "Not assembled / bad rotation / shifted / wrong "
-             "part (your decision, logged); not assembled can be placed again by the job.")],
-            parent=self.frame)
+        return inspectview.Viewer(self, x)
+
+    def run_name(self, x):
+        """The inspection run the row's picture belongs to (its directory name)."""
+        p = (x.get("res") or {}).get("image")
+        return os.path.basename(os.path.dirname(p)) if p else "%s-%s" % (self.job_name, time.strftime("%Y%m%d"))
+
+    def uses_golden(self, x):
+        return ins.load_golden(self.root, x["package"]) is not None or bool((x.get("res") or {}).get("golden"))
+
+    def mark_detection(self, x, rect, parent=None):
+        """The operator drew where the part really is (image px x0, y0, x1, y1): the verdict from that position, the
+        case saved for learning, optionally one more golden sample centred on it.  True when applied."""
+        res = x["res"]
+        dx, dy, verdict, truth = ins.hand_position(res, *rect)
+        ans = inspectview.ask_mark(parent or self.frame, x, verdict, self.uses_golden(x) or not res.get("expect_size"))
+        if ans is None:
+            return False
+        learn, golden = ans
+        was = res.setdefault("detected_verdict", res.get("verdict", ""))    # what the detection said, kept
+        res.update(hand_box=list(rect), hand_dx=dx, hand_dy=dy, manual_ok=truth == "ok",
+                   verdict="%s (was %s)" % (verdict, was))
+        notes = []
+        if learn:
+            d = ins.save_learning(self.root, self.run_name(x), x["ref"], res, x["package"], x["part"], truth)
+            notes.append("saved for learning: %s" % d)
+        if golden:
+            size = res.get("expect_size") or [abs(rect[2] - rect[0]) * res["upp"], abs(rect[3] - rect[1]) * res["upp"]]
+            p = ins.add_golden_sample(self.root, x["package"], res["_image"], res["upp"], res.get("axis_rot") or 0.0,
+                                      size[0], size[1], "%s %s (drawn by hand)" % (self.run_name(x), x["ref"]),
+                                      centre_px=((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0))
+            notes.append("golden sample added: %s" % p)
+        try:
+            ins.save_annotated(res, self.title(x))
+        except (Exception, JavaException) as e:
+            notes.append("image not updated: %s" % e)
+        self.log("%s %s %s: detection corrected by hand: %s (was %s)%s" % (
+            x["board"], x["ref"], x["part"], verdict, was, "".join("; " + n for n in notes)))
+        self.changed()
+        self.info.setText("%s: %s" % (x["ref"], verdict))
+        return True
 
     def camera_to_part(self, x=None):
         x = x or self.selected_row()
@@ -274,14 +309,32 @@ class Inspection(object):
         if not rows:
             JOptionPane.showMessageDialog(parent or self.frame, "Select inspected placement(s) that are not OK.")
             return
-        if JOptionPane.showConfirmDialog(parent or self.frame, "Set as OK (you checked them):\n%s" % "\n".join(
-                "%s %s: %s" % (x["ref"], x["part"], x["res"]["verdict"]) for x in rows[:12]), "Set as OK",
-                JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+        from javax.swing import BoxLayout
+        box = JPanel()
+        box.setLayout(BoxLayout(box, BoxLayout.Y_AXIS))
+        box.add(JLabel("<html>Set as OK (you checked them):<br>%s</html>" % "<br>".join(
+            "%s %s: %s" % (x["ref"], x["part"], x["res"]["verdict"].replace("<", "&lt;")) for x in rows[:12])))
+        learnable = [x for x in rows if x["res"].get("_image") is not None and self.uses_golden(x)]
+        learn = JCheckBox("learn: add them as golden samples of their package (%d placement(s) checked with golden "
+                          "samples)" % len(learnable), bool(learnable))
+        learn.setEnabled(bool(learnable))
+        box.add(learn)
+        if JOptionPane.showConfirmDialog(parent or self.frame, box, "Set as OK", JOptionPane.OK_CANCEL_OPTION) \
+                != JOptionPane.OK_OPTION:
             return
         for x in rows:
             was = x["res"]["verdict"]
             x["res"]["verdict"] = "OK (set by hand; was %s)" % was
             x["res"]["manual_ok"] = True
+            if learn.isSelected() and x in learnable:
+                r = x["res"]
+                size = r.get("expect_size") or [2.0, 2.0]
+                try:
+                    p = ins.add_golden_sample(self.root, x["package"], r["_image"], r["upp"], r.get("axis_rot") or 0.0,
+                                              size[0], size[1], "%s %s (set as OK)" % (self.run_name(x), x["ref"]))
+                    self.log("%s: golden sample added for %s: %s" % (x["ref"], x["package"], p))
+                except (Exception, JavaException) as e:
+                    self.log("%s: golden sample not added: %s" % (x["ref"], e))
             try:
                 ins.save_annotated(x["res"], self.title(x))
             except (Exception, JavaException) as e:

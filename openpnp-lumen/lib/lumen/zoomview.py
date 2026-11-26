@@ -39,6 +39,9 @@ class _Mouse(MouseAdapter):
         self.zp.wheel(e.getX(), e.getY(), e.getPreciseWheelRotation())
 
     def mousePressed(self, e):
+        if getattr(self.zp.panel, "on_rect", None) is not None:   # ImageView rectangle mode: the drag draws
+            self.last = None
+            return
         self.last = (e.getX(), e.getY()) if SwingUtilities.isLeftMouseButton(e) else None
 
     def mouseDragged(self, e):
@@ -122,11 +125,13 @@ class ZoomPan(object):
 
 class ImageView(JPanel):
     """One image, fitted; zoom / pan; overlay(g, k) paints in image pixels (k = screen pixels per image pixel);
-    on_click(ix, iy) gets image pixels."""
+    on_click(ix, iy) gets image pixels.  Rectangle mode (start_rect(on_rect)): a left drag draws a rectangle instead
+    of moving the picture, on_rect(x0, y0, x1, y1) gets it in image pixels; the wheel still zooms."""
 
     def __init__(self, image, overlay=None, on_click=None, size=(900, 560)):
         JPanel.__init__(self)
         self.image, self.overlay, self.on_click = image, overlay, on_click
+        self.on_rect, self.rect, self._rect_start = None, None, None
         self.setPreferredSize(Dimension(size[0], size[1]))
         self.setBackground(Color(40, 40, 40))
         self.zp = ZoomPan(self)
@@ -135,11 +140,32 @@ class ImageView(JPanel):
 
         class Click(MouseAdapter):
             def mouseClicked(self, e):
-                if SwingUtilities.isLeftMouseButton(e) and view.on_click is not None:
+                if SwingUtilities.isLeftMouseButton(e) and view.on_click is not None and view.on_rect is None:
                     p = view.to_image(e.getX(), e.getY())
                     if p is not None:
                         view.on_click(p[0], p[1])
-        self.addMouseListener(Click())
+
+            def mousePressed(self, e):
+                if view.on_rect is not None and SwingUtilities.isLeftMouseButton(e):
+                    view._rect_start = view.to_image(e.getX(), e.getY())
+                    view.rect = None
+
+            def mouseDragged(self, e):
+                if view.on_rect is not None and view._rect_start is not None:
+                    p = view.to_image(e.getX(), e.getY())
+                    if p is not None:
+                        view.rect = (view._rect_start[0], view._rect_start[1], p[0], p[1])
+                        view.repaint()
+
+            def mouseReleased(self, e):
+                if view.on_rect is not None and view._rect_start is not None and view.rect is not None:
+                    r, fn = view.rect, view.on_rect
+                    view._rect_start = None
+                    if abs(r[2] - r[0]) > 3 and abs(r[3] - r[1]) > 3:
+                        fn(min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))
+        c = Click()
+        self.addMouseListener(c)
+        self.addMouseMotionListener(c)
 
     def fit(self):
         iw, ih = self.image.getWidth(), self.image.getHeight()
@@ -159,13 +185,35 @@ class ImageView(JPanel):
 
     def set_image(self, image):
         self.image = image
+        self.rect = None
         self.zp.reset()
+
+    def zoom_centre(self, scale):
+        """Zoom to scale (1 = fit) around the picture centre; applied at the next paint (the panel has a size then)."""
+        self._pending_zoom = scale
+        self.repaint()
+
+    def _apply_zoom(self):
+        s = getattr(self, "_pending_zoom", None)
+        if not s or self.getWidth() <= 0:
+            return
+        self._pending_zoom = None
+        s = max(1.0, min(self.zp.max_scale, s))
+        cx, cy = self.getWidth() / 2.0, (self.getHeight() - 18) / 2.0
+        self.zp.at.setTransform(s, 0, 0, s, cx * (1 - s), cy * (1 - s))
+        self.zp._clamp()
+
+    def start_rect(self, on_rect):
+        """Rectangle mode on (on_rect(x0, y0, x1, y1) image px when a drag ends) or off (None)."""
+        self.on_rect, self.rect, self._rect_start = on_rect, None, None
+        self.repaint()
 
     def paintComponent(self, graphics):
         self.super__paintComponent(graphics)
         g = _G(graphics)
         quality(graphics)
         old = g.getTransform()
+        self._apply_zoom()
         if self.image is not None:
             s, ox, oy = self.fit()
             g.setClip(0, 0, self.getWidth(), self.getHeight() - 18)
@@ -175,6 +223,11 @@ class ImageView(JPanel):
             draw_picture(graphics, self.image, self.shrunk, s * self.zp.scale())
             if self.overlay is not None:
                 self.overlay(graphics, s * self.zp.scale())
+            if self.rect is not None:
+                x0, y0, x1, y1 = self.rect
+                g.setColor(Color(255, 0, 255))
+                g.setStroke(BasicStroke(float(2.0 / max(0.01, s * self.zp.scale()))))
+                g.drawRect(int(min(x0, x1)), int(min(y0, y1)), int(abs(x1 - x0)), int(abs(y1 - y0)))
             g.setTransform(old)
             g.setClip(None)
         g.setColor(Color(220, 220, 220))
