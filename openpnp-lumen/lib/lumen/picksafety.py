@@ -262,11 +262,22 @@ def bottom_upp(machine):
     return None
 
 
+def _actuate(actuator, on):
+    """actuate(boolean) explicitly (lumen.zprobe.actuate); plain call outside Jython (unit tests)."""
+    try:
+        from lumen.zprobe import actuate
+        from org.openpnp.spi import Actuator  # noqa: F401  (Jython only)
+    except ImportError:
+        return actuator.actuate(bool(on))
+    return actuate(actuator, on)
+
+
 def measure_free_air(machine, nozzle, ms=1500):
     """Pump + valve on with the EMPTY nozzle (no motion), read as fast as possible for ms, valve + pump off.
     [(ms since the valve opened, v)].  Call inside a machine task; the person confirmed the nozzle is empty.
-    The pump goes through OpenPnP's head pump control like a pick (Lumen: the valve alone gives no vacuum, the sensor
-    then reads 0 - bench 2026-11-26)."""
+    The valve is switched with actuate(boolean) explicitly: Jython chose actuate(double) for a Python True, a Boolean
+    actuator (Lumen VAC1) sends nothing then and the sensor reads 0 (bench 2026-11-26, "VAC1.actuate(1.0)").  The
+    pump request goes through the head's pump control like a pick (no-op on the Lumen, kept for other machines)."""
     import time
     if nozzle.getPart() is not None:
         raise RuntimeError("%s holds a part" % nozzle.getName())
@@ -279,14 +290,14 @@ def measure_free_air(machine, nozzle, ms=1500):
     head.actuatePumpRequest(nozzle, True)                # pump on (+ the head's pump-on wait)
     try:
         t0 = time.time()
-        valve.actuate(True)
+        _actuate(valve, True)
         try:
             while (time.time() - t0) * 1000.0 < ms:
                 v = float(str(sense.read()))
                 if v > 0:
                     curve.append(((time.time() - t0) * 1000.0, v))
         finally:
-            valve.actuate(False)
+            _actuate(valve, False)
     finally:
         head.actuatePumpRequest(nozzle, False)
     if not curve:

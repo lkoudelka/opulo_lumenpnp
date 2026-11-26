@@ -284,14 +284,23 @@ cannot be used (no slot, no location, disabled, ...). Read-only towards the job 
 tip change and stop with "Can't move ... soft limit" (no tip changer). Fix: tick a loaded tip in
 <i>Packages &gt; Nozzle Tips</i>, or load the needed tip by hand.</p>
 <p><i>Show on feeder LEDs</i>: green = needed and ready, red = needed but has an issue, off = not used by the job.</p>
+<p><b>Go to problem</b> opens where the selected line's problem is fixed, with the row already selected:
+a feeder OpenPnP will not use -&gt; <i>Feeders</i> tab, that feeder (its settings below the table); no feeder has the
+part -&gt; <i>Scripts &gt; Lumen &gt; Feeders</i>, tab <i>Assign feeders</i>, the part selected; nozzle tips or body
+size -&gt; <i>Packages</i> tab, the package; part height -&gt; <i>Parts</i> tab, the part. <b>Next problem &gt;&gt;</b>
+walks through all problems of the job one by one. Coming back to this window re-reads the job, so fixed lines turn
+green.</p>
 <p><i>Camera to feeder</i> (or double-click a line): the top camera goes over the pick location of the selected
 part's feeder; press again for its next feeder. <i>Camera to next placement</i>: over the part's placements on the
 board, not yet placed ones first; each press goes to the next one. The status line says where the camera is.</p>
 """ + MOVES % "top camera only, at safe Z (Camera to feeder / placement); otherwise none.",
     "tips": {
+        "Go to problem": "Open the OpenPnP tab (Feeders / Packages / Parts) or the Lumen Feeders window where the selected "
+                         "line's problem is fixed, with that row selected. Several problems: you choose which.",
+        "Next problem >>": "Go to the next problem of the job (all lines, one problem at a time), the same way.",
         "Camera to feeder": "Top camera over the selected part's feeder (again: its next feeder). Double-click a line does the same.",
         "Camera to next placement": "Top camera over the selected part's next placement on the board (not yet placed first).",
-        "Refresh": "Re-read the job and the feeders.",
+        "Refresh": "Re-read the job and the feeders (also done when you come back to this window).",
         "Show on feeder LEDs": "Light the job's Photon feeders: green ready, red issue, others off.",
         "Feeder LEDs off": "Switch the feeder LEDs off again.",
         "Close": "Close the window.",

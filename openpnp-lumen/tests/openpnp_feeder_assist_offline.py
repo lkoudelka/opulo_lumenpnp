@@ -115,10 +115,13 @@ class G(object):
 PC = []
 
 
-def open_tool():
-    """Scripts > Lumen > Feeders (Part Check + Assistant merged); returns its 'Assign feeders' tab and the window."""
+def open_tool(focus=None):
+    """Scripts > Lumen > Feeders (Part Check + Assistant merged); returns its 'Assign feeders' tab and the window.
+    focus: the lumen_focus global of lumen.gotofix.open_assign (Job Readiness > Go to problem)."""
     src = open(os.path.join(ROOT, "scripts", "Lumen", "Feeders.py")).read().rstrip().split("\n")
     g = {"__name__": "__main__", "scripting": Scr(), "machine": machine, "gui": G()}
+    if focus is not None:
+        g["lumen_focus"] = focus
     code = compile("\n".join(src[:-1]) + "\n", "Feeders.py", "exec")
     exec(code, g)
     g["JFrame"] = Frame
@@ -152,6 +155,13 @@ S.out.println("proposals")
 fa, content = open_tool()
 check("every option / button / column described", not uihelp.missing(content, "feeders"), uihelp.missing(content, "feeders")[:5])
 rows = dict((x["id"], x) for x in fa.pmodel.rows)
+check("opened without focus: first tab (Job feeders)", PC[0].tabs.getSelectedIndex() == 0)
+_pid = sorted(rows)[-1]
+fa_f, _ = open_tool({"tab": "assign", "part": _pid})
+_sel = fa_f.selected_part()
+check("opened by Job Readiness > Go to problem: tab Assign feeders, the part selected",
+      PC[0].tabs.getSelectedIndex() == 2 and _sel is not None and _sel["id"] == _pid, (PC[0].tabs.getSelectedIndex(), _pid))
+fa, content = open_tool()
 check("the renamed parts are listed (no feeder holds them)", all(p[0] in rows for p in RENAME.values()), sorted(rows))
 check("parts that have an enabled feeder are hidden", "C_0402_1005Metric-1u" not in rows or not any(
     machine.getFeeder(k).isEnabled() for k in [str(f.getId()) for f in machine.getFeeders() if f.getPart() is not None
