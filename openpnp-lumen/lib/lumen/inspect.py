@@ -126,14 +126,19 @@ def find_body(image, upp, length, width, expect_rot):
             score = serr + d / length
             if best is None or score < best[0]:
                 ang = r.angle if a >= bb else r.angle + 90.0       # image angle of the long axis (deg, y down)
-                best = (score, r.center.x, r.center.y, -ang, (l_, w_), name, serr)
+                best = (score, r.center.x, r.center.y, -ang, (l_, w_), name, serr, r)
     if best is None:
         return {"found": False, "why": "no blob of %.2f x %.2f mm near the location" % (length, width)}
-    _, bx, by, mang, size, name, serr = best
+    _, bx, by, mang, size, name, serr, rect = best
     period = 90.0 if abs(length - width) < 0.15 * length else 180.0
     err = ((mang - expect_rot) + period / 2.0) % period - period / 2.0
+    from org.opencv.core import Point
+    import jarray
+    pts = jarray.array([Point() for _ in range(4)], Point)
+    rect.points(pts)
     return {"found": True, "dx": (bx - cx) * upp, "dy": -(by - cy) * upp, "angle_err": err, "size": size,
-            "size_err": serr, "method": "size (%s)" % name}
+            "size_err": serr, "method": "size (%s)" % name,
+            "box_px": [(p.x + x0, p.y + y0) for p in pts]}              # the body found, whole-image pixels
 
 
 def rotate(mat, deg):
@@ -304,21 +309,103 @@ def analyse(image, upp, package_id, length, width, rot, root):
 
 
 # ---------------------------------------------------------------------------------------
+# the result drawn into the image
+# ---------------------------------------------------------------------------------------
+def verdict_colour(v):
+    from java.awt import Color
+    if v.startswith("OK"):
+        return Color(0, 200, 0)
+    if v.startswith("FAIL") or v.startswith("ERROR"):
+        return Color(235, 0, 0)
+    return Color(255, 150, 0)
+
+
+def annotate(image, res, title):
+    """Copy of the camera image with the inspection drawn in: where the part should be (cyan, dashed: body size at
+    the placement rotation; cross = placement location), the body found (green OK / orange CHECK / red FAIL)
+    and the verdict."""
+    import jarray
+    from java.awt import BasicStroke, Color, Font, FontMetrics, Polygon, RenderingHints
+    from lumen import zoomview
+    out = zoomview.copy_image(image)
+    w, h = out.getWidth(), out.getHeight()
+    g = zoomview._G(out.createGraphics())
+    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    v = res.get("verdict", "")
+    col = verdict_colour(v)
+    lw = max(2.0, w / 700.0)
+    cx, cy = w / 2.0, h / 2.0
+
+    def poly(points):
+        return Polygon(jarray.array([int(round(x)) for x, _ in points], "i"),
+                       jarray.array([int(round(y)) for _, y in points], "i"), len(points))
+    upp, size = res.get("upp"), res.get("expect_size")
+    g.setColor(Color(0, 220, 255))
+    if upp and size and size[0] and size[1]:
+        a = math.radians(res.get("axis_rot", 0.0))
+        hl, hw = size[0] / 2.0 / upp, size[1] / 2.0 / upp
+        pts = [(cx + x * math.cos(a) - y * math.sin(a), cy - (x * math.sin(a) + y * math.cos(a)))
+               for x, y in ((-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw))]      # machine CCW, image y down
+        g.setStroke(BasicStroke(lw, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0,
+                                jarray.array([4 * lw, 3 * lw], "f"), 0.0))
+        g.draw(poly(pts))
+    g.setStroke(BasicStroke(lw))
+    r = 6 * lw
+    g.drawLine(int(cx - r), int(cy), int(cx + r), int(cy))
+    g.drawLine(int(cx), int(cy - r), int(cx), int(cy + r))
+    box = (res.get("body") or {}).get("box_px")
+    if box:
+        g.setColor(col)
+        g.setStroke(BasicStroke(1.5 * lw))
+        g.draw(poly(box))
+    fs = max(16, int(w / 55))
+    g.setFont(Font("SansSerif", Font.BOLD, fs))
+    text = "%s   %s" % (title, v)
+    tw = FontMetrics.stringWidth(g.getFontMetrics(), text)          # (public class: Java 17 module access)
+    g.setColor(Color(0, 0, 0, 170))
+    g.fillRect(0, 0, min(w, tw + fs), int(fs * 1.6))
+    g.setColor(col)
+    g.drawString(text, int(fs / 2), int(fs * 1.15))
+    g.dispose()
+    return out
+
+
+def save_annotated(res, title):
+    """(Re)write res['image'] from the raw picture (res['_image']) and the result, e.g. after Set as OK."""
+    from javax.imageio import ImageIO
+    from java.io import File
+    if res.get("_image") is not None and res.get("image"):
+        ImageIO.write(annotate(res["_image"], res, title), "png", File(res["image"]))
+
+
+# ---------------------------------------------------------------------------------------
 # machine part (camera only)
 # ---------------------------------------------------------------------------------------
-def inspect_placement(machine, board_location, placement, out_dir, root):
-    """Top camera over the placement (board Z + part height), capture, analyse, save the image."""
-    from org.openpnp.model import Length, LengthUnit, Location
+def go_to_placement(machine, board_location, placement):
+    """Top camera over the placement at safe Z, focused on the part top (board Z + part height).
+    Returns (location mm, z).  Call inside a machine task."""
+    from org.openpnp.model import LengthUnit, Location
     from org.openpnp.util import MovableUtils, Utils2D
+    mm = LengthUnit.Millimeters
+    part = placement.getPart()
+    loc = Utils2D.calculateBoardPlacementLocation(board_location, placement.getLocation()).convertToUnits(mm)
+    z = board_location.getLocation().convertToUnits(mm).getZ() + (part.getHeight().convertToUnits(mm).getValue() if part else 0.0)
+    cam = machine.getDefaultHead().getDefaultCamera()
+    MovableUtils.moveToLocationAtSafeZ(cam, Location(mm, loc.getX(), loc.getY(), z, 0.0))
+    return loc, z
+
+
+def inspect_placement(machine, board_location, placement, out_dir, root):
+    """Top camera over the placement (board Z + part height), capture, analyse, save the picture with the result
+    drawn in (<ref>.png) and as taken (<ref>-raw.png)."""
+    from org.openpnp.model import Length, LengthUnit
     from javax.imageio import ImageIO
     from java.io import File
     mm = LengthUnit.Millimeters
     part = placement.getPart()
     pkg = part.getPackage() if part is not None else None
-    loc = Utils2D.calculateBoardPlacementLocation(board_location, placement.getLocation()).convertToUnits(mm)
-    z = board_location.getLocation().convertToUnits(mm).getZ() + (part.getHeight().convertToUnits(mm).getValue() if part else 0.0)
+    loc, z = go_to_placement(machine, board_location, placement)
     cam = machine.getDefaultHead().getDefaultCamera()
-    MovableUtils.moveToLocationAtSafeZ(cam, Location(mm, loc.getX(), loc.getY(), z, 0.0))
     img = cam.settleAndCapture()
     upp = cam.getUnitsPerPixel(Length(z, mm)).convertToUnits(mm).getX()
     length, width, src = body_size(pkg)
@@ -327,12 +414,14 @@ def inspect_placement(machine, board_location, placement, out_dir, root):
     if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
         rot += 90.0
     res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root)
-    res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot)
+    res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot,
+               expect_size=[length, width] if length else None)
+    res["_image"] = img
     if out_dir:
         if not os.path.isdir(out_dir):
             os.makedirs(out_dir)
-        p = os.path.join(out_dir, "%s.png" % _safe(str(placement.getId())))
-        ImageIO.write(img, "png", File(p))
-        res["image"] = p
-    res["_image"] = img
+        base = os.path.join(out_dir, _safe(str(placement.getId())))
+        ImageIO.write(img, "png", File(base + "-raw.png"))
+        res["raw_image"], res["image"] = base + "-raw.png", base + ".png"
+        save_annotated(res, "%s  %s" % (placement.getId(), part.getId() if part else "-"))
     return res

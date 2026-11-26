@@ -55,6 +55,30 @@ check("verdicts: ok OK / offset CHECK / rot90 CHECK / missing FAIL",
       and "rotated" in ins.verdict({"body": ins.find_body(img("rot90"), upp, L, W, 0.0)})
       and ins.verdict({"body": ins.find_body(img("missing"), upp, L, W, 0.0)}).startswith("FAIL"))
 
+S.out.println("result drawn into the saved image")
+r = ins.find_body(img("offset"), upp, L, W, 0.0)
+bx = [p[0] for p in r["box_px"]]
+by = [p[1] for p in r["box_px"]]
+w0, h0 = img("offset").getWidth(), img("offset").getHeight()
+cxb, cyb = sum(bx) / 4.0, sum(by) / 4.0
+check("found body: box corners in whole-image pixels around the found centre",
+      len(r["box_px"]) == 4 and abs((cxb - w0 / 2.0) * upp - r["dx"]) < 0.01 and abs(-(cyb - h0 / 2.0) * upp - r["dy"]) < 0.01
+      and abs((max(bx) - min(bx)) * upp - 1.0) < 0.15, (r["box_px"], r["dx"], r["dy"]))
+res = {"body": r, "verdict": ins.verdict({"body": r}), "upp": upp, "expect_size": [L, W], "axis_rot": 0.0}
+a = ins.annotate(img("offset"), res, "C7  C_0402")
+raw = img("offset")
+orange = ins.verdict_colour(res["verdict"]).getRGB() & 0xFFFFFF
+px = lambda im, x, y: im.getRGB(int(x), int(y)) & 0xFFFFFF
+mx, my = (r["box_px"][0][0] + r["box_px"][1][0]) / 2.0, (r["box_px"][0][1] + r["box_px"][1][1]) / 2.0
+on_box = [px(a, mx + i, my + j) for i in range(-2, 3) for j in range(-2, 3)]      # (anti-aliased line)
+check("annotated: the found box in the verdict colour (CHECK = orange), the raw image unchanged",
+      orange in on_box and px(raw, cxb, cyb) == px(img("offset"), cxb, cyb) and a is not raw, (hex(on_box[0]), hex(orange)))
+check("annotated: placement cross (cyan) at the image centre", 0x00DCFF in [px(a, w0 / 2.0 + i, h0 / 2.0 + j) for i in (-1, 0, 1)
+                                                                          for j in (-1, 0, 1)])
+out = os.path.join(tempfile.mkdtemp(), "C7.png")
+res.update(_image=raw, image=out)
+ins.save_annotated(res, "C7  C_0402")
+check("save_annotated writes <ref>.png", os.path.isfile(out) and ImageIO.read(File(out)).getWidth() == w0)
 S.out.println("golden sample method")
 root = tempfile.mkdtemp()
 ins.save_golden(root, "C_0402_1005Metric", img("ok"), upp, 0.0, L, W, "test ok.png")

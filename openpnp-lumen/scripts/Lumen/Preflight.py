@@ -57,6 +57,9 @@ DEFAULT = {
         {"id": "vacuum_sensors", "on": True, "severity": "warn"},
         {"id": "job_readiness", "on": True, "severity": "fail"},
         {"id": "feeder_bus", "on": True, "severity": "fail", "min_version": ""},
+        {"id": "script_engines", "on": True, "severity": "warn",
+         "_help": "OpenPnP's 'Pool scripting engines?' off: every event script (Lumen hooks) loads a new Python "
+                  "engine, ~0.6 s per feed / pick / placement"},
         {"id": "orientation", "on": True, "severity": "warn",
          "_help": "uses Scripts > Lumen > Orientation Setup confirmations; skipped if that helper was never used"},
         {"id": "board_z", "on": False, "severity": "warn", "max_tilt_mm": 0.15,
@@ -74,9 +77,24 @@ def load_config():
         json.dump(DEFAULT, f, indent=2)
         f.close()
     try:
-        return p, json.load(open(p))
+        cfg = json.load(open(p))
     except ValueError as e:
         return p, {"steps": [], "_error": "preflight.json is not valid JSON: %s" % e}
+    return p, with_new_steps(cfg)
+
+
+def with_new_steps(cfg):
+    """Steps added to DEFAULT after the person's preflight.json was written run too (at their DEFAULT place);
+    the file is not rewritten, its own steps keep their settings and order."""
+    have = set(s.get("id") for s in cfg.get("steps", []))
+    steps = list(cfg.get("steps", []))
+    for i, d in enumerate(DEFAULT["steps"]):
+        if d["id"] not in have:
+            prev = [x["id"] for x in DEFAULT["steps"][:i]]
+            at = max([j + 1 for j, s in enumerate(steps) if s.get("id") in prev] or [0])
+            steps.insert(at, dict(d))
+    cfg["steps"] = steps
+    return cfg
 
 
 def vtuple(v):
@@ -172,6 +190,22 @@ def st_feeder_bus(cfg, ctx):
     return not missing and not old, detail
 
 
+HOOKS = ("Feeder.BeforeFeed.py", "Nozzle.AfterPick.py", "Job.Placement.Complete.py", "Job.Error.py")
+
+
+def st_script_engines(cfg, ctx):
+    events = os.path.join(str(scripting.getScriptsDirectory()), "Events")
+    hooks = [h for h in HOOKS if os.path.exists(os.path.join(events, h))]
+    pooled = machine.isPoolScriptingEngines() if hasattr(machine, "isPoolScriptingEngines") else True
+    if pooled or not hooks:
+        return True, "scripting engines pooled" if pooled else "no Lumen job hooks installed"
+    per = len([h for h in hooks if h != "Job.Error.py"])
+    return False, ("'Pool scripting engines?' is off: each of %d job hook(s) (%s) loads a new Python engine, "
+                   "~0.6 s per feed / pick / placement (~%.1f s per part). Machine Setup > machine > General > Pool "
+                   "scripting engines? (then restart OpenPnP)" % (per, ", ".join(h[:-3] for h in hooks if h != "Job.Error.py"),
+                                                                  0.6 * per))
+
+
 def st_board_z(cfg, ctx):
     """§1: contact-probe board Z at configured bare points (ContactProbeNozzle, lumen profile)."""
     from org.openpnp.model import LengthUnit, Location
@@ -242,7 +276,8 @@ def st_orientation(cfg, ctx):
 # explicit: inside OpenPnP's script engine globals() is a Java scope without .items() (bug 2026-11-25)
 STEPS = {"machine_enabled": st_machine_enabled, "job_open": st_job_open, "home": st_home, "lights": st_lights,
          "nozzle_tips": st_nozzle_tips, "vacuum_sensors": st_vacuum_sensors, "job_readiness": st_job_readiness,
-         "feeder_bus": st_feeder_bus, "board_z": st_board_z, "orientation": st_orientation}
+         "feeder_bus": st_feeder_bus, "board_z": st_board_z, "orientation": st_orientation,
+         "script_engines": st_script_engines}
 
 
 def confirm_home(parent):
