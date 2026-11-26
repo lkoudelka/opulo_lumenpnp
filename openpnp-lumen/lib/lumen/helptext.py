@@ -389,6 +389,46 @@ rotation in Orientation Setup.</p>
         "Status": "ready, or why the feeder / part cannot be used yet (disabled, no location, no loaded nozzle tip, ...).",
     },
 }
+# Feeders = Feeder Part Check + Feeder Assistant in one window (2026-11-26: "shall be merged")
+HELP["feeders"] = {
+    "title": "Feeders - the job's feeders with the camera, pick location check, options while feeding, assign feeders",
+    "html": """
+<p><b>Job feeders</b>: the feeders of the open job (untick <i>only feeders of the open job</i> for every Photon feeder),
+with the references they serve, how many are left and the job status. <b>Next &gt;&gt;</b> moves the top camera to the
+next feeder, <i>&lt;&lt; Previous</i> back, double-click a row goes to that one; the line on top says where the camera is.
+Feeders that are not Photon feeders (tray, strip) are listed for the camera round only.</p>
+""" + HELP["part_check"]["html"] + """
+<p><b>Assign feeders (new board)</b>: """ + HELP["feeder_assist"]["html"].split("<p><b>Tab Assign feeders</b> (new board / panel): ", 1)[-1],
+    "tips": {},
+    "columns": {},
+    "tabs": {
+        "Job feeders": "The open job's feeders: camera round (Next / Previous), check them now with the camera, apply the "
+                       "pick offset, set it by hand.",
+        "Options per feeder": HELP["part_check"]["tabs"]["Options per feeder"],
+        "Assign feeders (new board)": "A new board / panel: which set-up feeder holds each part (name matching), applied "
+                                      "after your confirmation.",
+    },
+}
+for _k in ("part_check", "feeder_assist"):
+    HELP["feeders"]["tips"].update(HELP[_k]["tips"])
+    HELP["feeders"]["columns"].update(HELP[_k].get("columns", {}))
+HELP["feeders"]["tips"].update({
+    "Camera to feeder": "Top camera to the clicked feeder's pick location (any tab; double-click a row in Job feeders).",
+    "<< Previous": "Top camera to the previous feeder of the Job feeders list (wraps round).",
+    "Next >>": "Top camera to the next feeder of the Job feeders list, in slot order (wraps round).",
+    "Identify (blink LED)": "The clicked Photon feeder (Job feeders / Options, or the lower list in Assign feeders) blinks "
+                            "its LED white 3 times. No motion.",
+    "only feeders of the open job": "Job feeders / Options: only the feeders whose part the open job places (default). "
+                                    "Untick: every Photon feeder. Hidden rows are unticked.",
+})
+HELP["feeders"]["columns"].update({
+    "References": "Placements of the job this feeder serves (not placed first).",
+    "Left": "Placements of its part not placed yet.",
+    "Result": "Check result, or before a check the job status (ready, or why the feeder / part cannot be used yet).",
+    "Tape": "Tape found by the check (sprocket holes), or 'not a Photon feeder: camera only'.",
+})
+
+
 HELP["orientation"] = {
     "title": "Orientation Setup - pin 1 in the feeder vs. in the CAD footprint",
     "html": """

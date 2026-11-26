@@ -107,11 +107,11 @@ def render(panel, name):
     return p
 
 
-TOOLS = [("Feeder_Part_Check.py", "part_check"), ("Board_Z_Probe.py", "board_z"), ("Nozzle_Offset_Calibration.py", "nozzle_cal"),
+TOOLS = [("Feeders.py", "feeders"), ("Board_Z_Probe.py", "board_z"), ("Nozzle_Offset_Calibration.py", "nozzle_cal"),
          ("Placement_Inspection.py", "inspection"), ("Feeder_Firmware_Update.py", "firmware_update"),
          ("Job_Readiness.py", "job_readiness"), ("Last_Placements.py", "last_placements"), ("Orientation_Setup.py", "orientation"),
          ("Pick_Offset_Learning.py", "pick_learning"), ("Preflight.py", "preflight"),
-         ("Feeder_Assistant.py", "feeder_assist"), ("Machine_Calibration.py", "machine_cal")]
+         ("Machine_Calibration.py", "machine_cal")]
 OBJS = {}
 for script, key in TOOLS:
     src = open(os.path.join(ROOT, "scripts", "Lumen", script)).read().rstrip().split("\n")
@@ -138,7 +138,7 @@ for script, key in TOOLS:
         sp = hp[0].getClientProperty("lumen.help.text")
         btn.doClick()
         ok = sp.isVisible() and btn.getText().startswith(u"▾")
-        if script in ("Feeder_Part_Check.py", "Board_Z_Probe.py"):
+        if script in ("Feeders.py", "Board_Z_Probe.py"):
             render(content, "help-%s-open.png" % key)
         btn.doClick()
         ok = ok and not sp.isVisible()
@@ -185,13 +185,13 @@ for script, key in TOOLS:
         machine.setSpeed(_speed0)
         obj.cal = None
         g_mc["oppnp"].confirm_ready, g_mc["oppnp"].run_machine_task = _orig_cr, _orig_rmt
-    if script == "Feeder_Part_Check.py":
+    if script == "Feeders.py":
         render(content, "help-%s-closed.png" % key)
         tips = [c.getToolTipText() for c in uihelp._walk(content) if hasattr(c, "getText") and unicode(c.getText()).startswith(u"return fails")]
         check("example tooltip (return fails option) is the concrete text", tips and "Off (default)" in tips[0], tips[:1])
         hdr = [c for c in uihelp._walk(content) if c.getClass().getSimpleName() == "JTable"][0].getTableHeader()
         check("table header visible in the scroll pane (column tips)", hdr.isShowing() or hdr.getParent() is not None, hdr.getParent())
-    if script == "Feeder_Part_Check.py" and len(obj.opt_model.rows) >= 2:
+    if script == "Feeders.py" and len(obj.opt_model.rows) >= 2:
         import json as _j
         from java.lang import Integer as _I
         sf = os.path.join(sandbox, "lumen", "settings.json")
@@ -324,7 +324,7 @@ check("sharp shrink: copies are kept (no work per repaint)", sh.get(big, 0.2)[0]
 sq2.zp.reset()
 
 # Feeder Part Check: only the open job's feeders, offset set by hand in the photo
-g_p, pc = OBJS["Feeder_Part_Check.py"]
+g_p, pc = OBJS["Feeders.py"]
 jp = g_p["job_part_ids"](G())
 pc.job_only.setSelected(True)
 pc.apply_filter()
@@ -333,7 +333,9 @@ want = len([x for x in pc.model.rows if x["feeder"].getPart() is not None and st
 check("part check: 'only feeders of the open job' shows exactly the job's feeders", vis == want and 0 < vis < len(pc.model.rows),
       (vis, want, len(pc.model.rows)))
 pc.select(lambda x: True)
-check("part check: Select all with the filter ticks only the shown feeders", len(pc.selected()) == vis)
+shown_photon = len([x for x in pc.model.rows if pc.shown(x) and x["photon"]])
+check("part check: Select all with the filter ticks only the shown Photon feeders (others: camera round only)",
+      len(pc.selected()) == shown_photon and shown_photon > 0, (len(pc.selected()), shown_photon, vis))
 pc.job_only.setSelected(False)
 pc.apply_filter()
 check("part check: filter off shows all feeders again", pc.table.getRowCount() == len(pc.model.rows))
@@ -453,7 +455,8 @@ _fc.tapevision.fiducial_java = _orig_fid
 machine.setHomed(_homed)
 
 # Feeder Assistant: Look at this feeder (camera) - synthetic camera picture
-g_a, fa = OBJS["Feeder_Assistant.py"]
+fa = pc.assign                                            # Feeders, tab 'Assign feeders'
+g_a = type(fa).__init__.im_func.func_globals
 fa.ptable.setRowSelectionInterval(0, 0)
 fa.show_feeders()
 fr_i = [i for i, r in enumerate(fa.fmodel.rows) if not r.get("sep")][0]

@@ -9,7 +9,7 @@ cam = machine.getDefaultHead().getDefaultCamera()
 RAW = args[0] if args else None
 RAW_SLOTS = (3, 4, 12, 15, 28, 38)          # 12 mm black, 12 mm + neighbour, paper off-pitch, empty, empty, paper
 
-g, cls = load_script("Feeder_Part_Check.py")
+g, cls = load_script("Feeders.py")
 d = g[cls]()
 rows = d.model.rows
 say("== Feeder Part Check: %d feeder rows" % len(rows))

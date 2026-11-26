@@ -1,5 +1,5 @@
 # Lumen: pick location centring while feeding (linked by openpnp-lumen install.sh).
-# Does nothing unless feeders are enabled in Scripts > Lumen > Feeder Part Check ("While feeding"),
+# Does nothing unless feeders are enabled in Scripts > Lumen > Feeders ("While feeding"),
 # except remembering which feeder supplies the nozzle (for the pick vacuum check).
 # Raises into the job ONLY to refuse a feed after a failed return to the feeder (option).  Variables from OpenPnP: feeder, nozzle, part, machine.
 try:
