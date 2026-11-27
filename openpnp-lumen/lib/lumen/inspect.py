@@ -25,6 +25,95 @@ import time
 # 0603 (1.6 x 0.8): 0.24 along / 0.24 across; 0805: 0.30 / 0.38; 0402: 0.15 / 0.15.
 LIMITS = {"offset_mm": 0.15, "offset_frac": 0.3, "offset_along": 0.15, "angle_deg": 8.0, "angle_square_deg": 15.0,
           "score_ok": 0.70, "score_fail": 0.45, "search_mm": 0.6, "size_tol": 0.45}
+DEFAULT_LIMITS = dict(LIMITS)
+# what the operator sets (Placement Inspection > Limits...): key -> (label, unit, min, max, step); fractions shown in %
+USER_LIMITS = (("offset_along", "Offset along the part (towards one pad)", "% of length", 0.05, 0.6, 0.01),
+               ("offset_frac", "Offset across the part", "% of width", 0.05, 0.8, 0.01),
+               ("offset_mm", "Offset limit never below", "mm", 0.05, 1.0, 0.01),
+               ("angle_deg", "Rotation", "deg", 1.0, 45.0, 0.5),
+               ("angle_square_deg", "Rotation, nearly square parts", "deg", 1.0, 45.0, 0.5))
+LIMIT_EXAMPLES = (("0402", 1.0, 0.5), ("0603", 1.6, 0.8), ("0805", 2.0, 1.25), ("1206", 3.2, 1.6),
+                  ("SOD-123", 2.7, 1.6), ("SOT-223", 6.5, 3.5))
+
+
+def limits_path(root):
+    return os.path.join(root, "limits.json")
+
+
+def check_limits(values):
+    """{key: float} -> the same, only USER_LIMITS keys, each within its range (ValueError otherwise)."""
+    out = {}
+    for k, label, unit, lo, hi, step in USER_LIMITS:
+        if k in values:
+            v = float(values[k])
+            if not lo - 1e-9 <= v <= hi + 1e-9:
+                raise ValueError("%s: %s outside %s .. %s" % (label, v, lo, hi))
+            out[k] = v
+    return out
+
+
+def load_limits(root):
+    """Operator limits from <root>/limits.json over the defaults (LIMITS updated); returns the values set there.
+    A missing or broken file: defaults."""
+    LIMITS.update(DEFAULT_LIMITS)
+    try:
+        f = open(limits_path(root))
+        try:
+            got = check_limits(json.load(f))
+        finally:
+            f.close()
+    except (IOError, OSError, ValueError, TypeError, AttributeError):
+        return {}
+    LIMITS.update(got)
+    return got
+
+
+def save_limits(root, values):
+    """Store the operator limits (only the ones differing from the defaults) and use them (LIMITS)."""
+    v = check_limits(values)
+    keep = dict((k, x) for k, x in v.items() if abs(x - DEFAULT_LIMITS[k]) > 1e-9)
+    if not os.path.isdir(root):
+        os.makedirs(root)
+    f = open(limits_path(root), "w")
+    try:
+        json.dump(keep, f, indent=1, sort_keys=True)
+    finally:
+        f.close()
+    LIMITS.update(DEFAULT_LIMITS)
+    LIMITS.update(v)
+    return keep
+
+
+def limits_text(limits=None):
+    """One line per example size: the allowed offsets (mm) along / across and the rotation."""
+    lim = limits or LIMITS
+    lo = lim["offset_mm"]
+    out = []
+    for name, l, w in LIMIT_EXAMPLES:
+        a = lim["angle_deg"] if l > 1.3 * w else lim["angle_square_deg"]
+        out.append("%s (%.1f x %.2f mm): along %.2f, across %.2f mm, rotation %g deg" % (
+            name, l, w, max(lo, lim["offset_along"] * l), max(lo, lim["offset_frac"] * w), a))
+    return out
+
+
+def reverdict(res):
+    """The verdict again with the current LIMITS.  A part drawn by hand is judged again from where it was drawn; a
+    decision by hand (Set as OK / NOT OK) is kept.  Returns (old, new) or None when kept / nothing to judge."""
+    v = res.get("verdict") or ""
+    if res.get("error") or "(set by hand" in v:
+        return None
+    if res.get("hand_box"):
+        if res.get("_image") is None:
+            return None
+        dx, dy, hv, truth = hand_position(res, *res["hand_box"])
+        new = "%s (was %s)" % (hv, res.get("detected_verdict", ""))
+        res.update(verdict=new, manual_ok=truth == "ok")
+        return v, new
+    if res.get("manual_ok") is not None:
+        return None
+    new = verdict(res)
+    res["verdict"] = new
+    return v, new
 
 
 # ---------------------------------------------------------------------------------------

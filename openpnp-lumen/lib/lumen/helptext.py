@@ -214,7 +214,11 @@ whether the part matches better <b>turned by 180 deg</b> (polarity).</li>
 (~/.openpnp2/lumen/inspection/&lt;job&gt;-&lt;time&gt;/: <i>&lt;ref&gt;.png</i> with the result drawn in, <i>&lt;ref&gt;-raw.png</i>
 as taken, <i>&lt;ref&gt;.json</i> what was used and found). Offset limits depend on the part: <b>along</b> it (towards one
 pad) 15 % of its length, <b>across</b> 30 % of its width, never below 0.15 mm (0603: 0.24 / 0.24 mm, 0805: 0.30 / 0.38);
-angle 8 deg (nearly square parts 15); golden score OK &ge; 0.70, FAIL &lt; 0.45.</p>
+angle 8 deg (nearly square parts 15); golden score OK &ge; 0.70, FAIL &lt; 0.45.
+<b>Limits...</b> sets the offset (along / across in % of the part, minimum in mm) and rotation limits between OK and
+CHECK, with the allowed values shown for 0402 .. SOT-223 while you change them. They are saved
+(inspection/limits.json), used by every next inspection and applied at once to the results in the table (your
+<i>Set as OK / NOT OK</i> and drawn decisions are kept). <i>Defaults</i> restores the values above.</p>
 <p><i>Show image</i> (or double-click a row): the picture, opened <b>zoomed on the part</b>; <b>&lt;&lt; Previous / Next
 &gt;&gt;</b> (or the arrow keys) go through the results in the table's order, <i>only not OK</i> skips the good ones. In
 the picture: <b>cyan dashed</b> = where the part should be, cross = placement location; the <b>box</b> = the part found
@@ -233,6 +237,8 @@ on) and, for a package with golden samples, the part becomes one more golden sam
         "Select all": "Tick all listed placements.", "Select none": "Untick all placements.",
         "Select not OK": "Tick the placements whose last result is CHECK, FAIL or ERROR (to inspect them again).",
         "Inspect selected": "Camera over each ticked placement, analyse, save the image.",
+        "Limits...": "Offset and rotation limits between OK and CHECK (saved; applied to the shown results at once, "
+                     "your decisions by hand kept).",
         "Make golden from selected": "Use the clicked, inspected placement (a GOOD part) as the golden sample of its package.",
         "Show image": "The saved image of the clicked row with the result drawn in, zoomed on the part; << Previous / Next >> "
                       "through the results, Set as OK / NOT OK and Draw where the part is there (double-click a row does the same).",

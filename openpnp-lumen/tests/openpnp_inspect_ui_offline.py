@@ -45,6 +45,7 @@ class Frame(object):
 class Pane(object):
     OK_OPTION = 0
     OK_CANCEL_OPTION = 2
+    PLAIN_MESSAGE = -1
     msgs = []
 
     @classmethod
@@ -235,6 +236,53 @@ d.set_not_ok()                                            # dialog answered OK w
 check("Set as NOT OK (default 'not assembled'): FAIL with the reason, NOT placed in the job (placed again next run)",
       ok_row["res"]["verdict"].startswith("FAIL: not assembled (part missing) (set by hand; was OK")
       and not job.retrievePlacedStatus(ok_row["bl"], ok_row["pl"].getId()), ok_row["res"]["verdict"])
+# Limits...: the operator's OK / CHECK limits, saved, applied to the shown results, hand decisions kept
+off_row = caps[1]
+before = off_row["res"]["verdict"]
+vals = iv.ask_limits(d.frame)                              # dialog answered OK unchanged: the current values back
+check("Limits dialog: unchanged values come back as they are (% shown, fractions returned)",
+      vals == dict((k[0], ins.LIMITS[k[0]]) for k in ins.USER_LIMITS), vals)
+hand = [(x["ref"], x["res"]["verdict"]) for x in caps if "(set by hand" in x["res"]["verdict"]]
+wide = {"offset_along": 0.6, "offset_frac": 0.8, "offset_mm": 1.0, "angle_deg": 45.0, "angle_square_deg": 45.0}
+iv.ask_limits = lambda parent: dict(wide)
+d.limits()
+lp = ins.limits_path(d.root)
+check("wide limits saved (limits.json) and used", json.load(open(lp)) == wide and ins.LIMITS["offset_mm"] == 1.0,
+      open(lp).read())
+check("the CHECK offset result (part drawn by hand 0.40 mm off) is OK with the wide limits; status says what changed",
+      before.startswith("CHECK") and off_row["res"]["verdict"].startswith("OK (part drawn by hand")
+      and off_row["res"]["manual_ok"] and "CHECK -> OK" in d.info.getText(), (before, off_row["res"]["verdict"],
+                                                                                   d.info.getText()))
+check("Set as OK / NOT OK decisions kept", [(x["ref"], x["res"]["verdict"]) for x in caps
+                                            if "(set by hand" in x["res"]["verdict"]] == hand and len(hand) == 2, hand)
+ins.LIMITS.update(ins.DEFAULT_LIMITS)
+check("load_limits: the saved values over the defaults", ins.load_limits(d.root) == wide and ins.LIMITS["angle_deg"] == 45.0)
+det = {"body": {"found": True, "dx": 0.2, "dy": 0.0, "angle_err": 20.0}, "expect_size": [1.0, 0.5], "axis_rot": 0.0}
+ins.LIMITS.update(ins.DEFAULT_LIMITS)
+det["verdict"] = ins.verdict(det)
+ins.LIMITS.update(wide)
+ch = ins.reverdict(det)
+check("detected offset 0.20 mm along a 0402 + 20 deg: CHECK with the defaults, OK with the wide limits",
+      ch and ch[0].startswith("CHECK") and "rotated" in ch[0] and det["verdict"] == "OK", ch)
+ins.LIMITS.update({"offset_along": 0.25, "angle_deg": 30.0})
+check("offset_along 25 % of 1.0 mm (0.25): 0.20 along OK; minimum 1.0 still wide", ins.reverdict(det)[1] == "OK")
+ins.LIMITS.update(ins.DEFAULT_LIMITS)
+ins.LIMITS.update({"offset_along": 0.25, "angle_deg": 30.0})
+check("... with the minimum back at 0.15: along 0.20 of 0.25 OK, rotation 20 of 30 OK", ins.reverdict(det)[1] == "OK")
+ins.LIMITS.update({"offset_along": 0.18})
+check("... along limit 0.18: CHECK offset", ins.reverdict(det)[1].startswith("CHECK: offset"), det["verdict"])
+iv.ask_limits = lambda parent: dict((k[0], ins.DEFAULT_LIMITS[k[0]]) for k in ins.USER_LIMITS)
+d.limits()
+check("back to the defaults: the result is CHECK again, limits.json empty", off_row["res"]["verdict"] == before
+      and json.load(open(lp)) == {}, (off_row["res"]["verdict"], open(lp).read()))
+bad = []
+for v_ in ({"offset_mm": 5.0}, {"angle_deg": 0.0}):
+    try:
+        ins.save_limits(d.root, v_)
+        bad.append(v_)
+    except ValueError:
+        pass
+check("limits outside their range refused", not bad and ins.LIMITS["offset_mm"] == ins.DEFAULT_LIMITS["offset_mm"], bad)
 d.export()
 csvp = os.path.join(d.out_dir, "inspection.csv")
 rows = open(csvp).read().strip().split("\n")

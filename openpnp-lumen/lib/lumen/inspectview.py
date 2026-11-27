@@ -163,5 +163,59 @@ def ask_mark(parent, x, verdict, golden_possible):
     return learn.isSelected(), gold.isSelected()
 
 
+def ask_limits(parent):
+    """The operator's OK / CHECK limits (lumen.inspect.USER_LIMITS) with live examples: {key: value} or None."""
+    from java.awt import GridBagConstraints, GridBagLayout, Insets
+    from javax.swing import JSpinner, SpinnerNumberModel
+    box = JPanel(GridBagLayout())
+    c = GridBagConstraints()
+    c.insets = Insets(3, 4, 3, 4)
+    c.anchor = GridBagConstraints.WEST
+    spins = {}
+    ex = JLabel()
+
+    def values():
+        out = {}
+        for k, label, unit, lo, hi, step in ins.USER_LIMITS:
+            v = float(spins[k].getValue())
+            out[k] = v / 100.0 if unit.startswith("%") else v
+        return out
+
+    def update(e=None):
+        lim = dict(ins.LIMITS)
+        lim.update(values())
+        ex.setText("<html>A placement is OK when its offset is within both limits (and the total offset within the "
+                   "larger one) and its rotation within the limit; otherwise CHECK.<br><br>With these values:<br>"
+                   + "<br>".join(_esc(t) for t in ins.limits_text(lim)) + "</html>")
+    row = 0
+    for k, label, unit, lo, hi, step in ins.USER_LIMITS:
+        pct = unit.startswith("%")
+        f = 100.0 if pct else 1.0
+        m = SpinnerNumberModel(round(ins.LIMITS[k] * f, 2), lo * f, hi * f, step * f)
+        sp = spins[k] = JSpinner(m)
+        sp.setPreferredSize(Dimension(80, sp.getPreferredSize().height))
+        sp.addChangeListener(lambda e: update())
+        c.gridy, c.gridx = row, 0
+        box.add(JLabel(label), c)
+        c.gridx = 1
+        box.add(sp, c)
+        c.gridx = 2
+        box.add(JLabel("%s (default %g)" % (unit, ins.DEFAULT_LIMITS[k] * f)), c)
+        row += 1
+
+    def defaults(e):
+        for k, label, unit, lo, hi, step in ins.USER_LIMITS:
+            spins[k].setValue(ins.DEFAULT_LIMITS[k] * (100.0 if unit.startswith("%") else 1.0))
+    c.gridy, c.gridx = row, 1
+    box.add(JButton("Defaults", actionPerformed=defaults), c)
+    c.gridy, c.gridx, c.gridwidth = row + 1, 0, 3
+    box.add(ex, c)
+    update()
+    if JOptionPane.showConfirmDialog(parent, box, "Inspection limits: OK or CHECK", JOptionPane.OK_CANCEL_OPTION,
+                                     JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION:
+        return None
+    return values()
+
+
 def _esc(t):
     return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

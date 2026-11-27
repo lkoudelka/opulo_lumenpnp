@@ -103,6 +103,7 @@ class Inspection(object):
     def __init__(self):
         self.log = oppnp.FileLog(scripting, "placement-inspection")
         self.root = os.path.join(oppnp.lumen_dir(scripting), "inspection")
+        ins.load_limits(self.root)                  # the operator's OK / CHECK limits (Limits...)
         self.model = Model()
         self.busy = False
         self.out_dir = None
@@ -152,6 +153,7 @@ class Inspection(object):
         b.add(JButton("Camera to part", actionPerformed=lambda e: self.camera_to_part()))
         b.add(JButton("Set as OK", actionPerformed=lambda e: self.set_ok()))
         b.add(JButton("Set as NOT OK...", actionPerformed=lambda e: self.set_not_ok()))
+        b.add(JButton("Limits...", actionPerformed=lambda e: self.limits()))
         b.add(JButton("Export CSV", actionPerformed=lambda e: self.export()))
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         root.add(b, BorderLayout.SOUTH)
@@ -205,6 +207,38 @@ class Inspection(object):
                 self.model.locked = False
                 oppnp.on_ui(lambda: self.run_btn.setEnabled(True))
         oppnp.in_background(work)
+
+    def limits(self):
+        """Offset / rotation limits between OK and CHECK: saved (<lumen>/inspection/limits.json), used by the next
+        inspections and applied now to the results in the table (decisions by hand kept)."""
+        old = dict((k[0], ins.LIMITS[k[0]]) for k in ins.USER_LIMITS)
+        v = inspectview.ask_limits(self.frame)
+        if v is None:
+            return
+        try:
+            ins.save_limits(self.root, v)
+        except (Exception, JavaException) as e:
+            JOptionPane.showMessageDialog(self.frame, "Limits not saved: %s" % e)
+            return
+        changed = ["%s %g -> %g" % (k, old[k], v[k]) for k in sorted(v) if abs(v[k] - old[k]) > 1e-9]
+        moves, kept = {}, 0
+        for x in self.all_rows:
+            r = x.get("res")
+            if not r:
+                continue
+            d = ins.reverdict(r)
+            if d is None:
+                kept += 1 if "(set by hand" in (r.get("verdict") or "") else 0
+                continue
+            a, b = d[0].split(":")[0].split(" ")[0], d[1].split(":")[0].split(" ")[0]
+            if a != b:
+                moves["%s -> %s" % (a, b)] = moves.get("%s -> %s" % (a, b), 0) + 1
+        text = "limits %s; results now: %s%s" % (", ".join(changed) or "unchanged",
+                                                  ", ".join("%d %s" % (n, m) for m, n in sorted(moves.items())) or "no verdict changed",
+                                                  "; %d Set as OK / NOT OK kept" % kept if kept else "")
+        self.log(text)
+        self.changed()
+        self.info.setText(text)
 
     def make_golden(self):
         x = self.selected_row()
