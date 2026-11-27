@@ -21,6 +21,8 @@ It is meant mainly for the **bigger, polarised parts**, where the orientation ma
 | You decide | none | the part lies on the board while you look; *Retake photo* moves the camera only |
 | Finish | pick the part up from the board, give it back to the feeder (or discard / leave it, as chosen) | a corrected feeder rotation is set **after** the part is back, if you agree |
 
+**Nozzle tip calibration:** at the first trial with a nozzle / tip after OpenPnP started, OpenPnP's own nozzle tip calibration (runout and rotation offset, over the bottom camera) runs for that nozzle, also N2, even if an older result is stored. Later trials in the same session use it. If calibration is switched off for the tip, the photo panel says so in red.
+
 **The board must have no solder paste on these pads** (a bare or test board). The tool refuses to start until you tick that.
 
 ## The photo

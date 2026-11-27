@@ -20,12 +20,15 @@ HELP["part_check"] = {
 <p>Checks Photon feeders with the <b>top camera</b>. The pocket centre comes from the tape's
 <b>sprocket holes</b> (EIA tape geometry), so it works on paper, clear and black tape and for any part.
 Whether a part sits in the pick pocket is detected on <b>white paper tape</b> only ("?" otherwise).</p>
-<p><b>Tab Check</b></p>
+<p><b>Check the pick location</b> (tab <i>Job feeders</i>)</p>
 <ol>
 <li><b>Check now:</b> tick feeders, <i>Check selected</i>. Result per feeder: part at pick, how far the pick
 location is from the pocket centre. A part already at pick sets OpenPnP's <i>Skip next feed</i>.</li>
 <li><b>Correct:</b> <i>Apply offset to selected</i> moves the pick location onto the pocket centre (max 2 mm,
 read back, logged).</li>
+<li><b>By hand</b> (pocket NOT FOUND, looks wrong, or a tray / strip feeder): <i>Set offset by hand</i> opens the
+check photo (or takes one at the pick location), you click the pocket / part centre, <i>Apply this offset</i> moves
+the pick location there after a confirmation (any distance).</li>
 </ol>
 <p><b>Tab Options per feeder</b> - what happens <b>during the job</b>, set <b>per feeder</b> (feeders behave differently
 with different parts / tapes):</p>
@@ -205,7 +208,8 @@ HELP["inspection"] = {
 bright <b>terminations</b> along the expected axis; a light ceramic body as bright as its tin is found as the
 <b>whole part</b> instead. <b>Missing</b> = bare pads: between them the solder mask.</li>
 <li><b>SMA / SMB / SMC diodes</b>: the two <b>lead tabs</b> with the black body between them.</li>
-<li><b>Other parts:</b> the dark body (package body size, else the name, e.g. SOD-323) near the location.</li>
+<li><b>Other parts:</b> the dark body (package body size, else the pads, else the name, e.g. SOD-323) near the
+location. A size you drew and kept (<i>Drawn sizes...</i>) comes first for every part kind.</li>
 <li><b>Golden samples:</b> pictures of good parts of a package (<i>Make golden</i>, and every part you confirm:
 <i>Set as OK</i> / <i>Draw where the part is</i>, up to 6 per package): the best match counts - score, offset, and
 whether the part matches better <b>turned by 180 deg</b> (polarity).</li>
@@ -264,7 +268,8 @@ the selected ones.</p>
         "Offset mm": "Distance of the found body from the expected location.",
         "Angle err": "Rotation error of the body (deg, CCW).",
         "Golden score": "Match with the package's golden sample (1.0 = identical).",
-        "Body size from": "Where the expected body size came from (package body, pads, KiCad name).",
+        "Body size from": "Where the expected size came from: drawn by hand (Drawn sizes...), EIA size code (chip "
+                          "parts), package body, package pads, or the package name (e.g. 0603, SOD-323 typical body).",
     },
 }
 
@@ -450,7 +455,8 @@ HELP["feeders"] = {
 <p><b>Job feeders</b>: the feeders of the open job (untick <i>only feeders of the open job</i> for every Photon feeder),
 with the references they serve, how many are left and the job status. <b>Next &gt;&gt;</b> moves the top camera to the
 next feeder, <i>&lt;&lt; Previous</i> back, double-click a row goes to that one; the line on top says where the camera is.
-Feeders that are not Photon feeders (tray, strip) are listed for the camera round only.</p>
+Feeders that are not Photon feeders (tray, strip) have no automatic check: camera round and <i>Set offset by
+hand</i> only.</p>
 """ + HELP["part_check"]["html"] + """
 <p><b>Assign feeders (new board)</b>: """ + HELP["feeder_assist"]["html"].split("<p><b>Tab Assign feeders</b> (new board / panel): ", 1)[-1],
     "tips": {},
@@ -495,7 +501,9 @@ an empty nozzle 0.04 mm). The median of the good picks in OpenPnP's log becomes 
 orientation OpenPnP's size check compares. With the <b>size check</b> on (BodySize, generous tolerance) an empty
 nozzle fails bottom vision and OpenPnP picks again. Note: the size is what the bottom camera sees (e.g. only the leads
 of a SOD-323), which is right for this check.</p>
-<p><b>Vacuum</b>: <i>Measure free air</i> turns the vacuum on for 1.5 s per nozzle (empty, no motion). The part-on
+<p>A package with <b>no good picks</b> in the log yet (e.g. the job stopped on its first part with "width too
+large: nominal 0.000"): <i>Job Readiness &gt; Measure body size</i> measures one part with the bottom camera.</p>
+<p><b>Vacuum</b>: <i>Measure free air</i> turns the pump and the valve on for 1.5 s per nozzle (empty, no motion). The part-on
 high limit goes halfway between the highest good pick and free air. The <b>part-off check</b> (OpenPnP turns the vacuum
 on for the probing time after a place: a part still on the nozzle seals it) is proposed only where free air and a
 part on the nozzle are clearly apart; it adds that time to every placement, so it is not ticked by default.</p>
@@ -503,7 +511,7 @@ part on the nozzle are clearly apart; it adds that time to every placement, so i
 configuration.</p>
 """ + MOVES % "none; <i>Measure free air</i> switches the vacuum on for 1.5 s per nozzle (no motion).",
     "tips": {
-        "Measure free air...": "Vacuum on for 1.5 s per nozzle with the EMPTY nozzle, no motion: the free-air level and its "
+        "Measure free air...": "Pump and valve on for 1.5 s per nozzle with the EMPTY nozzle, no motion: the free-air level and its "
                                "build-up (for the part-on and part-off proposals).",
         "Apply ticked...": "Lists every change, applies after your OK, logs old and new values.",
         "Close": "Close the window (nothing changes).",
