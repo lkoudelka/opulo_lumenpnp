@@ -104,9 +104,10 @@ def job_state(gui):
 UNKNOWN_JOB_STATE = "the job state could not be read"
 
 
-def machine_ready(machine, gui):
+def machine_ready(machine, gui, allow_paused=False):
     """None if machine work may start, otherwise the reason why not.  Returns
-    UNKNOWN_JOB_STATE if only the job state is unknown (caller asks the user)."""
+    UNKNOWN_JOB_STATE if only the job state is unknown (caller asks the user).  allow_paused: a paused job is no
+    obstacle (camera moves only - OpenPnP lets you jog while paused)."""
     if not machine.isEnabled():
         return "the machine is not enabled (connect first)"
     if machine.isBusy():
@@ -114,15 +115,15 @@ def machine_ready(machine, gui):
     state = job_state(gui)
     if state == "Unknown":
         return UNKNOWN_JOB_STATE
-    if state != "Stopped":
+    if state != "Stopped" and not (allow_paused and state == "Paused"):
         return "a job is %s - stop it first" % state.lower()
     return None
 
 
-def confirm_ready(machine, gui, parent, action):
+def confirm_ready(machine, gui, parent, action, allow_paused=False):
     """machine_ready() with UI: shows the reason, or asks when the job state is unknown.
     Returns True if the action may proceed."""
-    why = machine_ready(machine, gui)
+    why = machine_ready(machine, gui, allow_paused)
     if why is None:
         return True
     if why == UNKNOWN_JOB_STATE:

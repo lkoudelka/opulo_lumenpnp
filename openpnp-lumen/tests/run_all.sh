@@ -6,7 +6,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REL=${1:?usage: run_all.sh RELEASE.bin}
 RC=0
 for t in "test_photon_sim.py" "test_learning.py" "test_orientation.py" "test_tapevision.py" "test_pickvac.py" "test_feederopts.py" "test_partmatch.py" "test_testplace.py" "test_machinecal.py" "run_jython_smoke.sh" "run_openpnp_headless.sh" "run_openpnp_ui_headless.sh" \
-         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_pickvac_offline.sh" "run_help_offline.sh" "run_feeder_assist_offline.sh" "run_testplace_sim.sh" "run_tapevision_offline.sh" "run_config_compat.sh" "run_machinecal_sim.sh" "run_homeguard_sim.sh" "run_lastjob_sim.sh" "run_joberror_sim.sh" "run_picksafety_sim.sh" "run_feederoffset_sim.sh" "run_gotofix_sim.sh" "run_inspection_eval.sh" "run_enginepool_sim.sh" "test_picksafety.py" "test_profiles.py"; do
+         "run_orientation_headless.sh" "run_inspect_offline.sh" "run_pickvac_offline.sh" "run_help_offline.sh" "run_feeder_assist_offline.sh" "run_testplace_sim.sh" "run_tapevision_offline.sh" "run_config_compat.sh" "run_machinecal_sim.sh" "run_homeguard_sim.sh" "run_lastjob_sim.sh" "run_joberror_sim.sh" "run_picksafety_sim.sh" "run_feederoffset_sim.sh" "run_gotofix_sim.sh" "run_sizemeasure_sim.sh" "run_inspection_eval.sh" "run_enginepool_sim.sh" "test_picksafety.py" "test_profiles.py"; do
     echo "=== $t"
     case $t in
         test_learning.py|test_profiles.py|test_orientation.py|test_tapevision.py|test_pickvac.py|test_feederopts.py|test_partmatch.py|test_testplace.py|test_machinecal.py) ${PY:-python3} "$HERE/$t" ;;

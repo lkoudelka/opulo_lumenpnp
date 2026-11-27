@@ -86,10 +86,63 @@ def tip_problems(job, machine):
     return out
 
 
+def stock(f):
+    """(left, capacity) of a feeder that counts its parts - tray, rotated tray, strip with a max feed count - else None
+    (Photon and other tape feeders: OpenPnP does not know how many parts are left).  OpenPnP switches such a feeder
+    off when it runs empty (FeederEmptyException) and the job stops with "No compatible, enabled feeder found"."""
+    from org.openpnp.machine.reference.feeder import (ReferenceRotatedTrayFeeder, ReferenceStripFeeder,
+                                                      ReferenceTrayFeeder)
+    try:
+        if isinstance(f, ReferenceTrayFeeder):
+            cap = f.getTrayCountX() * f.getTrayCountY()
+        elif isinstance(f, ReferenceRotatedTrayFeeder):
+            cap = f.getTrayCountCols() * f.getTrayCountRows()
+        elif isinstance(f, ReferenceStripFeeder) and f.getMaxFeedCount() > 0:
+            cap = f.getMaxFeedCount()
+        else:
+            return None
+    except Exception:
+        return None
+    if cap <= 0:
+        return None
+    return max(0, cap - f.getFeedCount()), cap
+
+
+def set_stock(f, left):
+    """Tell the feeder it holds `left` parts now (after refilling): feed count = capacity - left, so the next pick
+    is the first pocket not yet used.  Returns the old feed count."""
+    st = stock(f)
+    if st is None:
+        raise ValueError("%s does not count its parts" % f.getName())
+    left = int(left)
+    if not 0 <= left <= st[1]:
+        raise ValueError("parts left must be 0..%d" % st[1])
+    old = f.getFeedCount()
+    f.setFeedCount(st[1] - left)
+    return old
+
+
+def stock_text(f):
+    st = stock(f)
+    return None if st is None else "%d of %d left" % st
+
+
+def size_check_on(part):
+    """True if the part's bottom vision checks the body size (then a package without body size fails every part:
+    "width too large: nominal 0.000, limit 0.000")."""
+    try:
+        from org.openpnp.machine.reference.vision import AbstractPartAlignment
+        s = AbstractPartAlignment.getInheritedVisionSettings(part, True)
+        return s is not None and s.isEnabled() and str(s.getCheckPartSizeMethod()) == "BodySize"
+    except Exception:
+        return False
+
+
 def readiness(job, machine, lumen_profile=None):
     """One row per part used by the job:
-    {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, issues: [str],
-     fixes: [gotofix.fix(): where each issue is fixed]}"""
+    {part, part_id, package, height, total, remaining, feeders: [feeder], enabled_feeders, left (parts in the
+     enabled feeders, None if a feeder does not count them), issues: [str], fixes: [gotofix.fix(): where each issue
+     is fixed]}"""
     from lumen.gotofix import fix
     from org.openpnp.machine.photon import PhotonFeeder
     if lumen_profile is None:
@@ -122,7 +175,19 @@ def readiness(job, machine, lumen_profile=None):
             issues.append("no usable feeder: " + "; ".join(
                 "%s: %s" % (f.getName(), unusable_reason(f)) for f in r["feeders"]))
             for f in r["feeders"]:
-                fixes.append(fix("feeder", "%s not usable: %s" % (f.getName(), unusable_reason(f)), f))
+                st = stock(f)
+                if st is not None and st[0] == 0:
+                    fixes.append(fix("count", "%s (%s) is empty: refill it, set the count, switch it on"
+                                     % (f.getName(), r["part_id"]), f))
+                fixes.append(fix("feeder", "%s (%s) not usable: %s" % (f.getName(), r["part_id"], unusable_reason(f)),
+                                 f))
+        stocks = [stock(f) for f in r["enabled_feeders"]]
+        r["left"] = sum(st[0] for st in stocks) if stocks and None not in stocks else None
+        if r["left"] is not None and r["left"] < r["remaining"]:
+            issues.append("not enough parts: the feeder(s) hold %d, the job needs %d more" % (r["left"], r["remaining"]))
+            for f in r["enabled_feeders"]:
+                fixes.append(fix("count", "%s (%s): %s, the job needs %d - refill it and set the count"
+                                 % (f.getName(), r["part_id"], stock_text(f), r["remaining"]), f))
         tip = tip_issue(part, machine) if part is not None and r["remaining"] > 0 else None
         if tip:
             issues.append(tip)
@@ -135,12 +200,16 @@ def readiness(job, machine, lumen_profile=None):
                 fixes.append(fix("part", "height of %s unknown (column Height)" % r["part_id"], part))
             else:
                 r["notes"].append("height unknown: probed on first pick (lumen)")
-        if lumen_profile and part is not None and r["package"]:
+        if part is not None and r["package"] and r["remaining"] > 0 and (lumen_profile or size_check_on(part)):
             try:
                 fp = part.getPackage().getFootprint()
                 if fp is None or fp.getBodyWidth() <= 0 or fp.getBodyHeight() <= 0:
-                    issues.append("package %s has no body size: the bottom-vision size check (lumen) would "
-                                  "reject it" % r["package"])
+                    if r["enabled_feeders"]:
+                        fixes.append(fix("measure", "measure the body size of package %s with the bottom camera (one "
+                                         "%s picked, 5 shots, back into its feeder; you confirm)"
+                                         % (r["package"], r["part_id"]), part))
+                    issues.append("package %s has no body size: the bottom-vision size check would reject every part "
+                                  "(\"width too large: nominal 0.000\")" % r["package"])
                     fixes.append(fix("package", "body size of package %s (tab Footprint, or Preflight > Pick safety "
                                      "learns it)" % r["package"], part.getPackage()))
             except Exception:
@@ -176,6 +245,9 @@ def unusable_reason(f):
     from org.openpnp.machine.photon import PhotonFeeder
     if f.isEnabled():
         return "OK"
+    st = stock(f)
+    if st is not None and st[0] == 0:
+        return "switched off, empty (all %d picked: OpenPnP switches an empty feeder off)" % st[1]
     if isinstance(f, PhotonFeeder):
         missing = []
         if f.getHardwareId() is None:
@@ -197,6 +269,9 @@ def feeder_text(f):
     # PhotonFeeder.getName() already ends with "(Slot: N)" once it has a slot address
     if isinstance(f, PhotonFeeder) and f.getSlotAddress() is not None and "Slot" not in t:
         t += " (Slot: %d)" % f.getSlotAddress()
+    st = stock_text(f)
+    if st is not None and (f.isEnabled() or stock(f)[0] > 0):
+        t += " [%s]" % st
     if not f.isEnabled():
         t += " (not usable: %s)" % unusable_reason(f)
     return t

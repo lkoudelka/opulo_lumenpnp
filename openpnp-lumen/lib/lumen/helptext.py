@@ -289,10 +289,23 @@ HELP["job_readiness"] = {
     "title": "Job Readiness - only what the open job needs",
     "html": """
 <p>Parts of the open job with quantity, remaining, part height and feeders, and precisely why a feeder
-cannot be used (no slot, no location, disabled, ...). Read-only towards the job and the configuration.</p>
+cannot be used (no slot, no location, disabled, ...). Read-only towards the job; the configuration changes only by <i>Refill / set count</i> and a confirmed <i>Measure body size</i>.</p>
 <p>A part whose package has <b>no compatible nozzle tip loaded</b> is an issue too: the job would try an automatic
 tip change and stop with "Can't move ... soft limit" (no tip changer). Fix: tick a loaded tip in
 <i>Packages &gt; Nozzle Tips</i>, or load the needed tip by hand.</p>
+<p><b>Parts left</b>: tray and strip feeders count their picks, so the <i>Feeder(s)</i> column shows e.g.
+<i>[3 of 5 left]</i>, and a part whose feeders hold fewer than the job still needs is an issue before the job runs.
+When a tray runs empty, OpenPnP switches the feeder off and the job stops with "No compatible, enabled feeder found".
+<b>Refill / set count</b> (also what <i>Go to problem</i> opens for it): enter how many parts are in the feeder now,
+and switch it on again. Works with the job paused; then resume it. Photon feeders do not report a count.</p>
+<p><b>Measure body size</b> (also what <i>Go to problem</i> opens for "no body size"): a package without body size
+fails OpenPnP's bottom-vision size check on every part ("width too large: nominal 0.000"). After you confirm, one
+part is fed and picked from its feeder, shown to the bottom camera 5 times (nozzle turned 0 / 90 / 180 / 270 / 0 deg,
+OpenPnP's own pipeline - the size its check compares) and given back into the feeder. You see the 5 results; only
+when they agree within 10 % is the median proposed, and it is applied as the package's body size only when you
+confirm. Needs an empty nozzle with a fitting tip loaded and a usable feeder; also with the job paused.</p>
+<p><b>Copy part ID</b>: for the search field of OpenPnP's <i>Feeders</i> tab (tray feeders are all called
+"ReferenceTrayFeeder", the part finds them).</p>
 <p><i>Show on feeder LEDs</i>: green = needed and ready, red = needed but has an issue, off = not used by the job.</p>
 <p><b>Go to problem</b> opens where the selected line's problem is fixed, with the row already selected:
 a feeder OpenPnP will not use -&gt; <i>Feeders</i> tab, that feeder (its settings below the table); no feeder has the
@@ -301,12 +314,18 @@ size -&gt; <i>Packages</i> tab, the package; part height -&gt; <i>Parts</i> tab,
 walks through all problems of the job one by one. Coming back to this window re-reads the job, so fixed lines turn
 green.</p>
 <p><i>Camera to feeder</i> (or double-click a line): the top camera goes over the pick location of the selected
-part's feeder; press again for its next feeder. <i>Camera to next placement</i>: over the part's placements on the
+part's feeder; press again for its next feeder. Also while the job is paused. <i>Camera to next placement</i>: over the part's placements on the
 board, not yet placed ones first; each press goes to the next one. The status line says where the camera is.</p>
-""" + MOVES % "top camera only, at safe Z (Camera to feeder / placement); otherwise none.",
+""" + MOVES % "top camera at safe Z (Camera to feeder / placement, also with the job paused); Measure body size: "
+                "feed, pick, bottom camera, part back into its feeder (after you confirm); otherwise none.",
     "tips": {
         "Go to problem": "Open the OpenPnP tab (Feeders / Packages / Parts) or the Lumen Feeders window where the selected "
                          "line's problem is fixed, with that row selected. Several problems: you choose which.",
+        "Refill / set count": "A tray / strip feeder of the selected part: how many parts are in it now (sets its pick "
+                              "count) and switch it on again after OpenPnP switched it off as empty.",
+        "Measure body size": "Package of the selected part has no body size: pick one part, 5 bottom-camera shots, "
+                             "part back into the feeder; you confirm the measured size before it is applied.",
+        "Copy part ID": "Copy the selected part id, to paste into the search field of OpenPnP's Feeders tab.",
         "Next problem >>": "Go to the next problem of the job (all lines, one problem at a time), the same way.",
         "Camera to feeder": "Top camera over the selected part's feeder (again: its next feeder). Double-click a line does the same.",
         "Camera to next placement": "Top camera over the selected part's next placement on the board (not yet placed first).",
@@ -318,7 +337,7 @@ board, not yet placed ones first; each press goes to the next one. The status li
     "columns": {
         "Part": "Part id.", "Package": "Package.", "Height mm": "Part height (needed for placing).",
         "Total": "Placements of this part in the job.", "Remaining": "Not yet placed.",
-        "Feeder(s)": "Feeders holding the part.", "Issues": "Why the part cannot be placed yet.",
+        "Feeder(s)": "Feeders holding the part; [n of m left] for trays and strips.", "Issues": "Why the part cannot be placed yet.",
     },
 }
 
