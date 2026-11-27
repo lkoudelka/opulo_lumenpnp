@@ -728,10 +728,11 @@ def _read_meta_t(p):
         return ""
 
 
-def analyse(image, upp, package_id, length, width, rot, root):
-    """Both methods on one image -> result dict incl. verdict."""
+def analyse(image, upp, package_id, length, width, rot, root, fixed=False):
+    """Both methods on one image -> result dict incl. verdict.  fixed: length x width is the operator's drawn size
+    (inspection_size): used as it is, not replaced by the EIA code or the lead span."""
     res = {}
-    if is_chip(package_id):
+    if is_chip(package_id) and not fixed:
         # chip parts: the EIA size code is the top-view outline (a body size learned by the bottom camera, e.g.
         # 0603 1.45 x 0.80, is shorter: bench R6 ends 1.5 mm apart rejected)
         nl, nw = chip_size(package_id)
@@ -739,7 +740,7 @@ def analyse(image, upp, package_id, length, width, rot, root):
             length, width = nl, nw
     span, lead_w = leaded_size(package_id)
     if span and not is_chip(package_id):
-        if not length or length < 0.8 * span:           # a learned lead span (Pick safety) is kept when set
+        if not fixed and (not length or length < 0.8 * span):           # a learned lead span (Pick safety) is kept when set
             length, width = span, lead_w
         res["body"] = chip_check(image, upp, length, width, rot, leads=True)
     elif length and is_chip(package_id):
@@ -861,6 +862,64 @@ def _write_json(path, data):
         f.close()
 
 
+# ---------------------------------------------------------------------------------------
+# operator's top-view sizes: <root>/sizes.json {package: {x, y (mm, footprint X / Y), source, t}}
+# ---------------------------------------------------------------------------------------
+def sizes_path(root):
+    return os.path.join(root, "sizes.json")
+
+
+def load_sizes(root):
+    try:
+        f = open(sizes_path(root))
+        try:
+            d = json.load(f)
+        finally:
+            f.close()
+        return dict((k, v) for k, v in d.items() if v.get("x", 0) > 0 and v.get("y", 0) > 0)
+    except (IOError, OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def inspection_size(root, package_id):
+    """The size the operator drew for this package ({x, y, source, t}) or None."""
+    return load_sizes(root).get(package_id) if root else None
+
+
+def save_inspection_size(root, package_id, x, y, source):
+    d = load_sizes(root)
+    d[package_id] = {"x": round(float(x), 2), "y": round(float(y), 2), "source": source,
+                     "t": time.strftime("%Y-%m-%d %H:%M")}
+    if not os.path.isdir(root):
+        os.makedirs(root)
+    _write_json(sizes_path(root), d)
+    return d[package_id]
+
+
+def forget_inspection_size(root, package_id):
+    d = load_sizes(root)
+    if d.pop(package_id, None) is None:
+        return False
+    _write_json(sizes_path(root), d)
+    return True
+
+
+def drawn_size(res, x0, y0, x1, y1):
+    """The drawn rectangle as the part's size in footprint X / Y (mm): (x, y), or None when the placement is not
+    turned by about a multiple of 90 deg (an upright rectangle around a slanted part is not its size)."""
+    upp = res.get("upp")
+    loc = res.get("location")
+    if not upp or not loc:
+        return None
+    r = loc[3] % 180.0
+    w, h = abs(x1 - x0) * upp, abs(y1 - y0) * upp
+    if min(r, 180.0 - r) <= 10.0:
+        return round(w, 2), round(h, 2)
+    if abs(r - 90.0) <= 10.0:
+        return round(h, 2), round(w, 2)
+    return None
+
+
 def hand_position(res, x0, y0, x1, y1):
     """The part where the operator drew it (image px rectangle) -> (dx, dy) mm from the placement location,
     verdict text, truth ('ok' / 'shifted').  The rotation is taken as expected (the rectangle has none)."""
@@ -933,14 +992,22 @@ def inspect_placement(machine, board_location, placement, out_dir, root):
     cam = machine.getDefaultHead().getDefaultCamera()
     img = cam.settleAndCapture()
     upp = cam.getUnitsPerPixel(Length(z, mm)).convertToUnits(mm).getX()
-    length, width, src = body_size(pkg)
-    # the body's long axis: footprint X if body width >= height, else Y
+    own = inspection_size(root, str(pkg.getId())) if pkg is not None and root else None
     rot = loc.getRotation()
-    if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
-        rot += 90.0
-    res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root)
+    if own is not None:
+        # the operator's drawn top-view size (footprint X / Y), not the footprint body (bottom vision: for diodes
+        # only the contacts, bench 2026-11-27)
+        length, width, src = max(own["x"], own["y"]), min(own["x"], own["y"]), "drawn by hand (%s)" % own.get("source", "")
+        if own["y"] > own["x"]:
+            rot += 90.0
+    else:
+        length, width, src = body_size(pkg)
+        # the body's long axis: footprint X if body width >= height, else Y
+        if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
+            rot += 90.0
+    res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root, fixed=own is not None)
     res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot)
-    if is_chip(str(pkg.getId()) if pkg else "") and chip_size(str(pkg.getId()))[0]:
+    if own is None and is_chip(str(pkg.getId()) if pkg else "") and chip_size(str(pkg.getId()))[0]:
         res["size_source"] = "EIA size code (chip)"           # analyse() used it, expect_size says so
     res["_image"] = img
     if out_dir:

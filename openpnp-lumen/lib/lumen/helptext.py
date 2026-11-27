@@ -230,13 +230,20 @@ it from the board first).</p>
 <p><b>Draw where the part is</b> - when the detection was wrong: drag a rectangle around the real part (its body with
 the terminations / leads). The verdict then comes from where you drew it (OK within the limits, else CHECK offset),
 the case is <b>saved for learning</b> (inspection/learning/: picture + your box, the test set the detection is tuned
-on) and, for a package with golden samples, the part becomes one more golden sample centred where it really is.</p>
+on) and, for a package with golden samples, the part becomes one more golden sample centred where it really is.
+<b>Keep the drawn size</b> (ticked when the placement is at 0 / 90 / 180 / 270 deg): the rectangle becomes the
+package's <b>top-view size</b> for every next inspection, before the package body, the EIA code or the lead span.
+The package footprint is not changed - bottom vision keeps its own size (for diodes the bottom camera sees only the
+contacts, so its body size is smaller than the part seen from the top). <b>Drawn sizes...</b> lists them and forgets
+the selected ones.</p>
 """ + MOVES % "the <b>top camera</b> only (safe Z): Inspect selected, Camera to part.",
     "tips": {
         "only placed": "Show only placements marked as placed in the job (off: all placements).",
         "Select all": "Tick all listed placements.", "Select none": "Untick all placements.",
         "Select not OK": "Tick the placements whose last result is CHECK, FAIL or ERROR (to inspect them again).",
         "Inspect selected": "Camera over each ticked placement, analyse, save the image.",
+        "Drawn sizes...": "Top-view sizes kept from 'Draw where the part is' (used instead of the package body); "
+                          "forget selected ones.",
         "Limits...": "Offset and rotation limits between OK and CHECK (saved; applied to the shown results at once, "
                      "your decisions by hand kept).",
         "Make golden from selected": "Use the clicked, inspected placement (a GOOD part) as the golden sample of its package.",

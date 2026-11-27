@@ -147,8 +147,9 @@ class Viewer(object):
             self.show(self.x)
 
 
-def ask_mark(parent, x, verdict, golden_possible):
-    """The confirmation after drawing: (learn, golden) or None (cancelled)."""
+def ask_mark(parent, x, verdict, golden_possible, size=None, size_now=""):
+    """The confirmation after drawing: (learn, golden, keep size) or None (cancelled).  size: the drawn size (x, y mm,
+    footprint X / Y) or None (placement not at a multiple of 90 deg: no size from the rectangle)."""
     box = JPanel()
     box.setLayout(BoxLayout(box, BoxLayout.Y_AXIS))
     box.add(JLabel("<html><b>%s</b> (%s): %s</html>" % (x["ref"], x["part"], _esc(verdict))))
@@ -157,10 +158,16 @@ def ask_mark(parent, x, verdict, golden_possible):
     gold = JCheckBox("add as golden sample of package %s (centred where you drew it)" % x["package"], golden_possible)
     gold.setEnabled(golden_possible)
     box.add(gold)
+    keep = JCheckBox("keep the drawn size %s for package %s in the next inspections (now: %s)" % (
+        "%.2f x %.2f mm" % size if size else "-", x["package"], size_now or "-"), size is not None)
+    keep.setEnabled(size is not None)
+    keep.setToolTipText("The top-view size of the part with its terminations / leads. The package footprint (bottom "
+                        "vision) is not changed: for diodes the bottom camera sees only the contacts.")
+    box.add(keep)
     if JOptionPane.showConfirmDialog(parent, box, "Detection was wrong: the part is here", JOptionPane.OK_CANCEL_OPTION) \
             != JOptionPane.OK_OPTION:
         return None
-    return learn.isSelected(), gold.isSelected()
+    return learn.isSelected(), gold.isSelected(), keep.isSelected()
 
 
 def ask_limits(parent):

@@ -103,6 +103,7 @@ def fake_inspect(machine_, bl, pl, out_dir, root):
                image=os.path.join(out_dir, "%s.png" % pl.getId()))               # rewrites the image
     ins.save_annotated(res, str(pl.getId()))
     return res
+real_inspect_placement = ins.inspect_placement
 ins.inspect_placement = fake_inspect
 d = g["Inspection"]()
 n_all = len(d.all_rows)
@@ -283,6 +284,27 @@ for v_ in ({"offset_mm": 5.0}, {"angle_deg": 0.0}):
     except ValueError:
         pass
 check("limits outside their range refused", not bad and ins.LIMITS["offset_mm"] == ins.DEFAULT_LIMITS["offset_mm"], bad)
+# Draw where the part is keeps the drawn top-view size per package (diodes: the footprint body from the bottom camera
+# is only the contacts); placement turned 90 deg: the image rectangle 2.0 x 1.2 mm is footprint X 1.2 x Y 2.0
+r = off_row["res"]
+r["location"] = [0.0, 0.0, 0.0, 90.0]
+v.show(off_row)
+v.draw()
+v.drawn(cx - 1.0 / truth["upp"], cy - 0.6 / truth["upp"], cx + 1.0 / truth["upp"], cy + 0.6 / truth["upp"])
+sz = ins.inspection_size(d.root, "C_0402_1005Metric")
+check("drawn size kept for the package in footprint X / Y (turned 90 deg: 1.2 x 2.0), this result's expected size "
+      "along its axis 2.0 x 1.2", sz and (sz["x"], sz["y"]) == (1.2, 2.0) and r["expect_size"] == [2.0, 1.2]
+      and r["size_source"].startswith("drawn by hand"), (sz, r["expect_size"], r.get("size_source")))
+check("... the package footprint is not touched", ins.body_size(off_row["pl"].getPart().getPackage())[2] != "drawn by hand")
+check("... at 45 deg no size from an upright rectangle", ins.drawn_size({"upp": 0.01, "location": [0, 0, 0, 45.0]},
+                                                                         0, 0, 100, 50) is None)
+res2 = real_inspect_placement(machine, off_row["bl"], off_row["pl"], None, d.root)
+check("next inspection of the package uses the drawn size (drawn long side is footprint Y -> axis = location rotation + 90)",
+      res2.get("size_source", "").startswith("drawn by hand") and res2["expect_size"] == [2.0, 1.2]
+      and abs(res2["axis_rot"] - (off_row["bl"].getLocation().getRotation() + 90.0)) < 1e-6,
+      (res2.get("size_source"), res2.get("expect_size"), res2.get("axis_rot"), res2.get("verdict")))
+check("Drawn sizes... > Forget: the package is back to its own size", ins.forget_inspection_size(d.root, "C_0402_1005Metric")
+      and ins.inspection_size(d.root, "C_0402_1005Metric") is None)
 d.export()
 csvp = os.path.join(d.out_dir, "inspection.csv")
 rows = open(csvp).read().strip().split("\n")
