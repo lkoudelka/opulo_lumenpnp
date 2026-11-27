@@ -25,6 +25,95 @@ import time
 # 0603 (1.6 x 0.8): 0.24 along / 0.24 across; 0805: 0.30 / 0.38; 0402: 0.15 / 0.15.
 LIMITS = {"offset_mm": 0.15, "offset_frac": 0.3, "offset_along": 0.15, "angle_deg": 8.0, "angle_square_deg": 15.0,
           "score_ok": 0.70, "score_fail": 0.45, "search_mm": 0.6, "size_tol": 0.45}
+DEFAULT_LIMITS = dict(LIMITS)
+# what the operator sets (Placement Inspection > Limits...): key -> (label, unit, min, max, step); fractions shown in %
+USER_LIMITS = (("offset_along", "Offset along the part (towards one pad)", "% of length", 0.05, 0.6, 0.01),
+               ("offset_frac", "Offset across the part", "% of width", 0.05, 0.8, 0.01),
+               ("offset_mm", "Offset limit never below", "mm", 0.05, 1.0, 0.01),
+               ("angle_deg", "Rotation", "deg", 1.0, 45.0, 0.5),
+               ("angle_square_deg", "Rotation, nearly square parts", "deg", 1.0, 45.0, 0.5))
+LIMIT_EXAMPLES = (("0402", 1.0, 0.5), ("0603", 1.6, 0.8), ("0805", 2.0, 1.25), ("1206", 3.2, 1.6),
+                  ("SOD-123", 2.7, 1.6), ("SOT-223", 6.5, 3.5))
+
+
+def limits_path(root):
+    return os.path.join(root, "limits.json")
+
+
+def check_limits(values):
+    """{key: float} -> the same, only USER_LIMITS keys, each within its range (ValueError otherwise)."""
+    out = {}
+    for k, label, unit, lo, hi, step in USER_LIMITS:
+        if k in values:
+            v = float(values[k])
+            if not lo - 1e-9 <= v <= hi + 1e-9:
+                raise ValueError("%s: %s outside %s .. %s" % (label, v, lo, hi))
+            out[k] = v
+    return out
+
+
+def load_limits(root):
+    """Operator limits from <root>/limits.json over the defaults (LIMITS updated); returns the values set there.
+    A missing or broken file: defaults."""
+    LIMITS.update(DEFAULT_LIMITS)
+    try:
+        f = open(limits_path(root))
+        try:
+            got = check_limits(json.load(f))
+        finally:
+            f.close()
+    except (IOError, OSError, ValueError, TypeError, AttributeError):
+        return {}
+    LIMITS.update(got)
+    return got
+
+
+def save_limits(root, values):
+    """Store the operator limits (only the ones differing from the defaults) and use them (LIMITS)."""
+    v = check_limits(values)
+    keep = dict((k, x) for k, x in v.items() if abs(x - DEFAULT_LIMITS[k]) > 1e-9)
+    if not os.path.isdir(root):
+        os.makedirs(root)
+    f = open(limits_path(root), "w")
+    try:
+        json.dump(keep, f, indent=1, sort_keys=True)
+    finally:
+        f.close()
+    LIMITS.update(DEFAULT_LIMITS)
+    LIMITS.update(v)
+    return keep
+
+
+def limits_text(limits=None):
+    """One line per example size: the allowed offsets (mm) along / across and the rotation."""
+    lim = limits or LIMITS
+    lo = lim["offset_mm"]
+    out = []
+    for name, l, w in LIMIT_EXAMPLES:
+        a = lim["angle_deg"] if l > 1.3 * w else lim["angle_square_deg"]
+        out.append("%s (%.1f x %.2f mm): along %.2f, across %.2f mm, rotation %g deg" % (
+            name, l, w, max(lo, lim["offset_along"] * l), max(lo, lim["offset_frac"] * w), a))
+    return out
+
+
+def reverdict(res):
+    """The verdict again with the current LIMITS.  A part drawn by hand is judged again from where it was drawn; a
+    decision by hand (Set as OK / NOT OK) is kept.  Returns (old, new) or None when kept / nothing to judge."""
+    v = res.get("verdict") or ""
+    if res.get("error") or "(set by hand" in v:
+        return None
+    if res.get("hand_box"):
+        if res.get("_image") is None:
+            return None
+        dx, dy, hv, truth = hand_position(res, *res["hand_box"])
+        new = "%s (was %s)" % (hv, res.get("detected_verdict", ""))
+        res.update(verdict=new, manual_ok=truth == "ok")
+        return v, new
+    if res.get("manual_ok") is not None:
+        return None
+    new = verdict(res)
+    res["verdict"] = new
+    return v, new
 
 
 # ---------------------------------------------------------------------------------------
@@ -639,10 +728,11 @@ def _read_meta_t(p):
         return ""
 
 
-def analyse(image, upp, package_id, length, width, rot, root):
-    """Both methods on one image -> result dict incl. verdict."""
+def analyse(image, upp, package_id, length, width, rot, root, fixed=False):
+    """Both methods on one image -> result dict incl. verdict.  fixed: length x width is the operator's drawn size
+    (inspection_size): used as it is, not replaced by the EIA code or the lead span."""
     res = {}
-    if is_chip(package_id):
+    if is_chip(package_id) and not fixed:
         # chip parts: the EIA size code is the top-view outline (a body size learned by the bottom camera, e.g.
         # 0603 1.45 x 0.80, is shorter: bench R6 ends 1.5 mm apart rejected)
         nl, nw = chip_size(package_id)
@@ -650,7 +740,7 @@ def analyse(image, upp, package_id, length, width, rot, root):
             length, width = nl, nw
     span, lead_w = leaded_size(package_id)
     if span and not is_chip(package_id):
-        if not length or length < 0.8 * span:           # a learned lead span (Pick safety) is kept when set
+        if not fixed and (not length or length < 0.8 * span):           # a learned lead span (Pick safety) is kept when set
             length, width = span, lead_w
         res["body"] = chip_check(image, upp, length, width, rot, leads=True)
     elif length and is_chip(package_id):
@@ -772,6 +862,64 @@ def _write_json(path, data):
         f.close()
 
 
+# ---------------------------------------------------------------------------------------
+# operator's top-view sizes: <root>/sizes.json {package: {x, y (mm, footprint X / Y), source, t}}
+# ---------------------------------------------------------------------------------------
+def sizes_path(root):
+    return os.path.join(root, "sizes.json")
+
+
+def load_sizes(root):
+    try:
+        f = open(sizes_path(root))
+        try:
+            d = json.load(f)
+        finally:
+            f.close()
+        return dict((k, v) for k, v in d.items() if v.get("x", 0) > 0 and v.get("y", 0) > 0)
+    except (IOError, OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def inspection_size(root, package_id):
+    """The size the operator drew for this package ({x, y, source, t}) or None."""
+    return load_sizes(root).get(package_id) if root else None
+
+
+def save_inspection_size(root, package_id, x, y, source):
+    d = load_sizes(root)
+    d[package_id] = {"x": round(float(x), 2), "y": round(float(y), 2), "source": source,
+                     "t": time.strftime("%Y-%m-%d %H:%M")}
+    if not os.path.isdir(root):
+        os.makedirs(root)
+    _write_json(sizes_path(root), d)
+    return d[package_id]
+
+
+def forget_inspection_size(root, package_id):
+    d = load_sizes(root)
+    if d.pop(package_id, None) is None:
+        return False
+    _write_json(sizes_path(root), d)
+    return True
+
+
+def drawn_size(res, x0, y0, x1, y1):
+    """The drawn rectangle as the part's size in footprint X / Y (mm): (x, y), or None when the placement is not
+    turned by about a multiple of 90 deg (an upright rectangle around a slanted part is not its size)."""
+    upp = res.get("upp")
+    loc = res.get("location")
+    if not upp or not loc:
+        return None
+    r = loc[3] % 180.0
+    w, h = abs(x1 - x0) * upp, abs(y1 - y0) * upp
+    if min(r, 180.0 - r) <= 10.0:
+        return round(w, 2), round(h, 2)
+    if abs(r - 90.0) <= 10.0:
+        return round(h, 2), round(w, 2)
+    return None
+
+
 def hand_position(res, x0, y0, x1, y1):
     """The part where the operator drew it (image px rectangle) -> (dx, dy) mm from the placement location,
     verdict text, truth ('ok' / 'shifted').  The rotation is taken as expected (the rectangle has none)."""
@@ -844,14 +992,22 @@ def inspect_placement(machine, board_location, placement, out_dir, root):
     cam = machine.getDefaultHead().getDefaultCamera()
     img = cam.settleAndCapture()
     upp = cam.getUnitsPerPixel(Length(z, mm)).convertToUnits(mm).getX()
-    length, width, src = body_size(pkg)
-    # the body's long axis: footprint X if body width >= height, else Y
+    own = inspection_size(root, str(pkg.getId())) if pkg is not None and root else None
     rot = loc.getRotation()
-    if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
-        rot += 90.0
-    res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root)
+    if own is not None:
+        # the operator's drawn top-view size (footprint X / Y), not the footprint body (bottom vision: for diodes
+        # only the contacts, bench 2026-11-27)
+        length, width, src = max(own["x"], own["y"]), min(own["x"], own["y"]), "drawn by hand (%s)" % own.get("source", "")
+        if own["y"] > own["x"]:
+            rot += 90.0
+    else:
+        length, width, src = body_size(pkg)
+        # the body's long axis: footprint X if body width >= height, else Y
+        if pkg is not None and pkg.getFootprint() is not None and pkg.getFootprint().getBodyHeight() > pkg.getFootprint().getBodyWidth():
+            rot += 90.0
+    res = analyse(img, upp, str(pkg.getId()) if pkg else "?", length, width, rot, root, fixed=own is not None)
     res.update(location=[loc.getX(), loc.getY(), z, loc.getRotation()], upp=upp, size_source=src, axis_rot=rot)
-    if is_chip(str(pkg.getId()) if pkg else "") and chip_size(str(pkg.getId()))[0]:
+    if own is None and is_chip(str(pkg.getId()) if pkg else "") and chip_size(str(pkg.getId()))[0]:
         res["size_source"] = "EIA size code (chip)"           # analyse() used it, expect_size says so
     res["_image"] = img
     if out_dir:
