@@ -6,7 +6,11 @@ jobinfo.readiness() gives every problem row a list of fixes, {kind, text, target
              -> Feeders tab, that feeder selected (its settings below the table);
 - "assign":  no feeder has the part -> Scripts > Lumen > Feeders, tab Assign feeders, the part selected;
 - "package": nozzle tip compatibility or body size -> Packages tab, the package selected;
-- "part":    part height -> Parts tab, the part selected.
+- "part":    part height -> Parts tab, the part selected;
+- "count":   a tray / strip feeder that is empty or holds fewer parts than the job needs -> the refill dialog
+             (ask_count / apply_count: parts in it now, switch it on again);
+- "measure": a package without body size -> measure it with the bottom camera (lumen.sizemeasure; Job Readiness
+             asks before the pick and before applying).
 OpenPnP's tables have a search field; a leftover search text would hide the row, so it is cleared first (as
 OpenPnP's own "show feeder for part" does).
 """
@@ -57,6 +61,41 @@ def show(gui, f):
     else:
         raise ValueError("no OpenPnP tab for a fix of kind %s" % kind)
     return "OpenPnP %s tab: %s selected - %s" % (TABS[kind], t.getName() if kind == "feeder" else t.getId(), f["text"])
+
+
+def ask_count(parent, f, part_id, needed):
+    """Refill dialog for a feeder that counts its parts: (parts left, switch on) or None (cancelled)."""
+    from javax.swing import BoxLayout, JCheckBox, JLabel, JOptionPane, JPanel, JSpinner, SpinnerNumberModel
+    from lumen import jobinfo
+    left, cap = jobinfo.stock(f)
+    box = JPanel()
+    box.setLayout(BoxLayout(box, BoxLayout.Y_AXIS))
+    box.add(JLabel("<html><b>%s</b> (part %s, id %s)<br>%d of %d picked, %d left; the job needs %d more.<br><br>"
+                   "Parts in the feeder now:</html>" % (f.getName(), part_id, f.getId(), cap - left, cap, left, needed)))
+    sp = JSpinner(SpinnerNumberModel(cap, 0, cap, 1))
+    box.add(sp)
+    box.add(JLabel("<html><br>The feeder uses its pockets in order and continues after the ones counted as picked:<br>"
+                   "with fewer parts than %d, put them in the last pockets. <i>Camera to feeder</i> shows the next "
+                   "pick.</html>" % cap))
+    on = JCheckBox("switch the feeder on (OpenPnP switched it off when it ran empty)", not f.isEnabled())
+    on.setEnabled(not f.isEnabled())
+    box.add(on)
+    if JOptionPane.showConfirmDialog(parent, box, "Refill / set count", JOptionPane.OK_CANCEL_OPTION) \
+            != JOptionPane.OK_OPTION:
+        return None
+    return int(sp.getValue()), on.isSelected()
+
+
+def apply_count(f, part_id, left, switch_on):
+    """Set the feeder's count (and switch it on); returns the text for the status line / log."""
+    from lumen import jobinfo
+    cap = jobinfo.stock(f)[1]
+    old = jobinfo.set_stock(f, left)
+    if switch_on and not f.isEnabled():
+        f.setEnabled(True)
+    return "%s (%s, id %s): picked %d -> %d of %d (%d left)%s" % (
+        f.getName(), part_id, f.getId(), old, f.getFeedCount(), cap, left,
+        ", switched on" if switch_on else "" if f.isEnabled() else ", still switched off")
 
 
 def open_assign(scripting, part_id):

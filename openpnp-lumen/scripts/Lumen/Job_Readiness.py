@@ -4,8 +4,9 @@
 # height, blocking issues.  Optional: show the job's Photon feeders on their LEDs
 # (green = needed and ready, red = needed but has an issue, off = not used by the job).
 # Camera to the selected line: the top camera goes over the part's feeder or its next placement on
-# the board (repeated presses step through them).  Camera moves only (safe Z).
-# Read-only towards the job and the machine configuration.
+# the board (repeated presses step through them; also while the job is paused).  Camera moves only (safe Z).
+# Read-only towards the job; the only configuration change is Refill / set count of a tray / strip feeder (the
+# operator's dialog).
 from __future__ import absolute_import, division, print_function
 
 import os
@@ -22,6 +23,9 @@ import lumen.jobinfo
 import lumen.feedercheck
 import lumen.lastjob
 import lumen.gotofix
+import lumen.picksafety
+import lumen.testplace
+import lumen.sizemeasure
 reload(lumen.photon)
 reload(lumen.oppnp)
 reload(lumen.helptext)
@@ -30,13 +34,16 @@ reload(lumen.jobinfo)
 reload(lumen.feedercheck)
 reload(lumen.lastjob)
 reload(lumen.gotofix)
-from lumen import feedercheck, gotofix, jobinfo, lastjob, oppnp, photon
+reload(lumen.picksafety)
+reload(lumen.testplace)
+reload(lumen.sizemeasure)
+from lumen import feedercheck, gotofix, jobinfo, lastjob, oppnp, photon, picksafety, sizemeasure, testplace
 from lumen.oppnp import JavaException
 
 from java.awt import BorderLayout, Color, Dimension, FlowLayout
 from java.awt.event import MouseAdapter, WindowAdapter
 from java.lang import String
-from javax.swing import (BorderFactory, JButton, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
+from javax.swing import (BorderFactory, BoxLayout, JButton, JFrame, JLabel, JOptionPane, JPanel, JScrollPane,
                          JTable, WindowConstants)
 from javax.swing.table import AbstractTableModel, DefaultTableCellRenderer
 
@@ -102,14 +109,22 @@ class Readiness(object):
         r = IssueRenderer(self.model)
         for i in range(len(COLS)):
             table.getColumnModel().getColumn(i).setCellRenderer(r)
-        for i, w in enumerate((160, 110, 70, 50, 70, 300, 320)):
+        for i, w in enumerate((160, 110, 70, 50, 70, 330, 320)):
             table.getColumnModel().getColumn(i).setPreferredWidth(w)
         sp = JScrollPane(table)
         sp.setPreferredSize(Dimension(1080, 380))
         root.add(sp, BorderLayout.CENTER)
-        b = JPanel(FlowLayout(FlowLayout.RIGHT))
-        b.add(JButton("Go to problem", actionPerformed=lambda e: self.go_problem()))
-        b.add(JButton("Next problem >>", actionPerformed=lambda e: self.next_problem()))
+        bar = JPanel()                               # two rows: fix the problems / look and refresh
+        bar.setLayout(BoxLayout(bar, BoxLayout.Y_AXIS))
+        b1, b2 = JPanel(FlowLayout(FlowLayout.RIGHT)), JPanel(FlowLayout(FlowLayout.RIGHT))
+        bar.add(b1)
+        bar.add(b2)
+        b1.add(JButton("Go to problem", actionPerformed=lambda e: self.go_problem()))
+        b1.add(JButton("Next problem >>", actionPerformed=lambda e: self.next_problem()))
+        b1.add(JButton("Refill / set count", actionPerformed=lambda e: self.refill()))
+        b1.add(JButton("Measure body size", actionPerformed=lambda e: self.measure_size()))
+        b1.add(JButton("Copy part ID", actionPerformed=lambda e: self.copy_part()))
+        b = b2
         b.add(JButton("Camera to feeder", actionPerformed=lambda e: self.camera_feeder()))
         b.add(JButton("Camera to next placement", actionPerformed=lambda e: self.camera_placement()))
         b.add(JButton("Refresh", actionPerformed=lambda e: self.refresh()))
@@ -118,8 +133,8 @@ class Readiness(object):
         b.add(JButton("Close", actionPerformed=lambda e: f.dispose()))
         self.info = JLabel(" ")
         south = JPanel(BorderLayout())
-        south.add(self.info, BorderLayout.CENTER)
-        south.add(b, BorderLayout.EAST)
+        south.add(self.info, BorderLayout.NORTH)
+        south.add(bar, BorderLayout.CENTER)
         root.add(south, BorderLayout.SOUTH)
         f.setContentPane(lumen.uihelp.wrap(root, "job_readiness"))
         f.pack()
@@ -162,6 +177,13 @@ class Readiness(object):
 
     def go_fix(self, x, j):
         f = x["fixes"][j]
+        if f["kind"] in ("count", "measure"):
+            self.at = (x["part_id"], j)
+            if f["kind"] == "count":
+                self.refill_feeder(x, f["target"])
+            else:
+                self.measure_size(x)
+            return
         try:
             if f["kind"] == "assign":
                 text = gotofix.open_assign(scripting, f["target"])
@@ -211,6 +233,127 @@ class Readiness(object):
         self.select_row(p[0])
         self.go_fix(rows[p[0]], p[1])
 
+    # -- feeders that count their parts (trays, strips): refill ---------------------------------------
+    def refill(self):
+        x = self.selected()
+        if x is None:
+            return
+        fs = [f for f in x["feeders"] if jobinfo.stock(f) is not None]
+        if not fs:
+            JOptionPane.showMessageDialog(self.frame, "%s: no feeder of this part counts its parts (only tray and strip "
+                                          "feeders do; a Photon feeder reports nothing)." % x["part_id"])
+            return
+        f = fs[0]
+        if len(fs) > 1:
+            texts = ["%s (id %s): %s" % (g.getName(), g.getId(), jobinfo.stock_text(g)) for g in fs]
+            c = JOptionPane.showInputDialog(self.frame, "%s is in %d feeders - which one?" % (x["part_id"], len(fs)),
+                                            "Refill / set count", JOptionPane.QUESTION_MESSAGE, None, texts, texts[0])
+            if c is None:
+                return
+            f = fs[texts.index(c)]
+        self.refill_feeder(x, f)
+
+    def refill_feeder(self, x, f):
+        state = oppnp.job_state(gui)
+        if state not in ("Stopped", "Paused"):
+            JOptionPane.showMessageDialog(self.frame, "Refill / set count: the job is %s - pause or stop it first."
+                                          % state.lower())
+            return
+        a = gotofix.ask_count(self.frame, f, x["part_id"], x["remaining"])
+        if a is None:
+            return
+        try:
+            text = "count set: " + gotofix.apply_count(f, x["part_id"], a[0], a[1])
+        except (Exception, JavaException) as e:
+            text = "count not set: %s" % e
+        self.log(text)
+        self.refresh()
+        self.info.setText(text)
+
+    # -- package without body size: measure it (bottom camera) ------------------------------------
+    def measure_size(self, x=None):
+        x = x or self.selected()
+        if x is None:
+            return
+        part = x["part"]
+        pkg = part.getPackage() if part is not None else None
+        if pkg is None:
+            JOptionPane.showMessageDialog(self.frame, "%s has no package." % x["part_id"])
+            return
+        if not x["enabled_feeders"]:
+            JOptionPane.showMessageDialog(self.frame, "%s: no usable feeder to pick one from - fix the feeder first."
+                                          % x["part_id"])
+            return
+        feeder = x["enabled_feeders"][0]
+        noz = testplace.compatible_nozzles(machine, part)
+        if not noz:
+            JOptionPane.showMessageDialog(self.frame, "%s: no EMPTY nozzle with a nozzle tip of package %s loaded (no "
+                                          "automatic tip change)." % (x["part_id"], pkg.getId()))
+            return
+        nozzle = noz[0]
+        if not self.can_move():
+            return
+        fp = pkg.getFootprint()
+        now = "%.2f x %.2f mm" % (fp.getBodyWidth(), fp.getBodyHeight()) if fp is not None else "none"
+        if JOptionPane.showConfirmDialog(self.frame, (
+                "Measure the body size of package %s (now %s) with the bottom camera?\n\n"
+                "One %s is fed and picked from %s (id %s) with %s, shown to the bottom camera 5 times\n"
+                "(nozzle turned 0 / 90 / 180 / 270 / 0 deg), then given back: %s.\n\n"
+                "Nothing is changed until you confirm the measured size." % (
+                    pkg.getId(), now, x["part_id"], feeder.getName(), feeder.getId(), nozzle.getName(),
+                    testplace.recycle_text(feeder.getClass().getSimpleName()))),
+                "Measure body size", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION:
+            return
+        self.info.setText("measuring %s with the bottom camera ..." % pkg.getId())
+
+        def work():
+            try:
+                res = oppnp.run_machine_task(machine, lambda: sizemeasure.measure(machine, part, feeder, nozzle,
+                                                                                   self.log))
+            except (Exception, JavaException) as e:
+                where = getattr(e, "where", "")
+                text = "size measurement of %s failed: %s%s" % (pkg.getId(), e, (" - " + where) if where else "")
+                self.log(text)
+                oppnp.on_ui(lambda: (self.info.setText(text), JOptionPane.showMessageDialog(self.frame, text)))
+                return
+            oppnp.on_ui(lambda: self.confirm_size(x, pkg, res))
+        oppnp.in_background(work)
+
+    def confirm_size(self, x, pkg, res):
+        sm = res["summary"]
+        rows = "".join("<tr><td>%.0f&deg;</td><td>%s</td></tr>" % (s["angle"], "%.2f x %.2f mm" % (s["w"], s["h"])
+                       if s.get("w") is not None else "failed: %s" % s.get("error", "")[:120]) for s in res["shots"])
+        html = ("<html><b>%s</b> (%s): bottom camera, 5 shots<br><table>%s</table><br>%s<br>Part: %s<br><br>"
+                % (pkg.getId(), x["part_id"], rows, sm["why"], res["back"]))
+        self.log("size measurement %s: %s -> %s" % (pkg.getId(), [(s["angle"], s.get("w"), s.get("h")) for s in
+                                                                    res["shots"]], sm))
+        if not sm["ok"]:
+            JOptionPane.showMessageDialog(self.frame, html + "Nothing applied.</html>", "Measure body size",
+                                          JOptionPane.WARNING_MESSAGE)
+            self.info.setText("size of %s not applied: %s" % (pkg.getId(), sm["why"]))
+            return
+        if JOptionPane.showConfirmDialog(self.frame, html + "Apply <b>%.2f x %.2f mm</b> (width x height) as the body "
+                                         "size of package %s?</html>" % (sm["w"], sm["h"], pkg.getId()),
+                                         "Measure body size", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION:
+            self.info.setText("size of %s measured (%.2f x %.2f mm), not applied" % (pkg.getId(), sm["w"], sm["h"]))
+            return
+        old = picksafety.apply_size(pkg, sm["w"], sm["h"])
+        text = "body size of package %s: %.2f x %.2f -> %.2f x %.2f mm (measured, confirmed)" % (
+            pkg.getId(), old[0], old[1], sm["w"], sm["h"])
+        self.log(text)
+        self.refresh()
+        self.info.setText(text)
+
+    def copy_part(self):
+        from java.awt import Toolkit
+        from java.awt.datatransfer import StringSelection
+        x = self.selected()
+        if x is None:
+            return
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(StringSelection(x["part_id"]), None)
+        self.info.setText("copied %s - paste it into the search field of the Feeders tab (it finds the part's "
+                          "feeders; tray feeders all have the same name)" % x["part_id"])
+
     # -- camera to the selected line -------------------------------------------------------------
     def selected(self):
         i = self.table.getSelectedRow()
@@ -226,7 +369,7 @@ class Readiness(object):
         return i
 
     def can_move(self):
-        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera"):
+        if not oppnp.confirm_ready(machine, gui, self.frame, "Cannot move the camera", allow_paused=True):
             return False
         if not machine.isHomed():
             JOptionPane.showMessageDialog(self.frame, "Cannot move the camera: the machine is not homed.\n"

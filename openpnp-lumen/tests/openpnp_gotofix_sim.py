@@ -177,5 +177,64 @@ for c in (FeedersPanel, PackagesPanel, PartsPanel):
         ok.append(False)
 check("OpenPnP's Feeders / Packages / Parts panels have the private searchTextField + search() that get cleared", all(ok), ok)
 check("search clearing never raises on a panel without a search field", gotofix._clear_search(JPanel()) is None)
+
+# Parts left (tray / strip feeders count their picks): empty tray switched off by OpenPnP, too few parts, refill
+from org.openpnp.machine.photon import PhotonFeeder
+from org.openpnp.machine.reference.feeder import ReferenceStripFeeder
+ta.setTrayCountX(1)
+ta.setTrayCountY(5)
+ta.setFeedCount(5)                                   # all picked; OpenPnP has switched it off (FeederEmptyException)
+tb.setTrayCountX(1)
+tb.setTrayCountY(5)
+tb.setFeedCount(4)                                   # 1 left, the job needs 2 (C11, C12)
+check("stock: tray 1x5 with 5 picked = (0, 5); 4 picked = (1, 5)", jobinfo.stock(ta) == (0, 5)
+      and jobinfo.stock(tb) == (1, 5), (jobinfo.stock(ta), jobinfo.stock(tb)))
+st = ReferenceStripFeeder()
+check("stock: Photon feeder and strip without max count -> None (unknown)", jobinfo.stock(PhotonFeeder()) is None
+      and jobinfo.stock(st) is None)
+st.setMaxFeedCount(10)
+st.setFeedCount(3)
+check("stock: strip with max count 10, 3 fed -> (7, 10)", jobinfo.stock(st) == (7, 10), jobinfo.stock(st))
+check("unusable reason of the empty, switched-off tray says empty", "empty" in jobinfo.unusable_reason(ta),
+      jobinfo.unusable_reason(ta))
+check("feeder text shows parts left", "[1 of 5 left]" in jobinfo.feeder_text(tb), jobinfo.feeder_text(tb))
+rows = jobinfo.readiness(job, machine, lumen_profile=True)
+by = dict((r["part_id"], r) for r in rows)
+check("A: empty tray -> first fix 'count' (refill), then 'feeder'", kinds("A")[:2] == [("count", ta), ("feeder", ta)],
+      kinds("A"))
+check("B: 1 left, 2 needed -> issue 'not enough parts' + fix 'count'", by["B"]["left"] == 1
+      and any("not enough parts" in i for i in by["B"]["issues"]) and ("count", tb) in kinds("B"), (by["B"]["issues"], kinds("B")))
+tb.setFeedCount(0)
+rows = jobinfo.readiness(job, machine, lumen_profile=True)
+by = dict((r["part_id"], r) for r in rows)
+check("B: 5 left, 2 needed -> no parts issue", by["B"]["left"] == 5 and not any("not enough" in i for i in by["B"]["issues"]),
+      by["B"]["issues"])
+t = gotofix.apply_count(ta, "A", 3, True)
+check("refill: 3 parts in the 1x5 tray -> feed count 2, switched on", ta.getFeedCount() == 2 and ta.isEnabled()
+      and jobinfo.stock(ta) == (3, 5) and "switched on" in t, (ta.getFeedCount(), ta.isEnabled(), t))
+bad = []
+for v in (-1, 6):
+    try:
+        jobinfo.set_stock(ta, v)
+        bad.append(v)
+    except ValueError:
+        pass
+check("refill: count outside 0..capacity refused, feeder unchanged", not bad and ta.getFeedCount() == 2, bad)
+
+# body size missing: an issue whenever the part's bottom vision checks the body size, not only with the lumen profile
+from org.openpnp.machine.reference.vision import AbstractPartAlignment, ReferenceBottomVision
+bvs = AbstractPartAlignment.getInheritedVisionSettings(cfg.getPart("A"), True)
+old = bvs.getCheckPartSizeMethod()
+rows = jobinfo.readiness(job, machine, lumen_profile=False)
+no_check = any("body size" in i for r in rows for i in r["issues"])
+bvs.setCheckPartSizeMethod(ReferenceBottomVision.PartSizeCheckMethod.BodySize)
+rows = jobinfo.readiness(job, machine, lumen_profile=False)
+by = dict((r["part_id"], r) for r in rows)
+check("no body size + vision size check BodySize -> issue + fix 'package' (also without lumen profile)",
+      jobinfo.size_check_on(cfg.getPart("A")) and any("body size" in i for i in by["A"]["issues"])
+      and any(f["kind"] == "package" and "body size" in f["text"] for f in by["A"]["fixes"]), by["A"]["issues"])
+check("... and no such issue while the size check is off", str(old) != "BodySize" and not no_check, (str(old), no_check))
+bvs.setCheckPartSizeMethod(old)
+
 _Sys.out.println("\n%d/%d checks passed" % (sum(results), len(results)))
 _Sys.exit(0 if all(results) else 1)
